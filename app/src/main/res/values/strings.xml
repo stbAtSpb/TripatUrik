@@ -247,14 +247,6 @@
     <string name="action_previous_description">Move to previous field</string>
 
     <string name="action_emoji">Emoji</string>
-    <string name="action_screenshot">Share screenshot</string>
-    <string name="screenshot_permission_denied">Screen capture permission denied</string>
-    <string name="screenshot_save_failed">Failed to save screenshot</string>
-    <string name="screenshot_capture_failed">Failed to capture screen</string>
-    <string name="screenshot_share_title">Share screenshot</string>
-    <string name="screenshot_notification_channel">Screenshot capture</string>
-    <string name="screenshot_notification_title">Capturing screenshot…</string>
-
     <!-- Concentric Benchmark (Phase 0) -->
     <string name="concentric_benchmark_title">Concentric Benchmark</string>
     <string name="concentric_benchmark_summary">Phase 0: SurfaceView rendering test (30 bubbles, 3 rings, 60fps target)</string>
