@@ -979,6 +979,9 @@ class UrikInputMethodService :
                     setOnBackspaceSwipeDeleteListener {
                         handleBackspaceSwipeDelete()
                     }
+                    setOnScreenshotClickListener {
+                        handleScreenshotRequest()
+                    }
                 }
 
             swipeKeyboardView = swipeView
@@ -996,6 +999,41 @@ class UrikInputMethodService :
             )
             null
         }
+
+    /**
+     * Handles screenshot button press: hides keyboard, then either reuses
+     * cached MediaProjection permission or launches the consent activity.
+     */
+    private fun handleScreenshotRequest() {
+        requestHideSelf(0)
+
+        ensureScreenshotNotificationChannel()
+
+        val cache = com.urik.keyboard.screenshot.ScreenshotPermissionCache
+        if (cache.hasPermission) {
+            val serviceIntent = android.content.Intent(this, com.urik.keyboard.screenshot.ScreenshotService::class.java).apply {
+                putExtra(com.urik.keyboard.screenshot.ScreenshotService.EXTRA_RESULT_CODE, cache.resultCode)
+                putExtra(com.urik.keyboard.screenshot.ScreenshotService.EXTRA_RESULT_DATA, cache.resultData)
+            }
+            startForegroundService(serviceIntent)
+        } else {
+            val intent = android.content.Intent(this, com.urik.keyboard.screenshot.ScreenshotCaptureActivity::class.java)
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        }
+    }
+
+    private fun ensureScreenshotNotificationChannel() {
+        val channel = android.app.NotificationChannel(
+            com.urik.keyboard.screenshot.ScreenshotService.CHANNEL_ID,
+            getString(R.string.screenshot_notification_channel),
+            android.app.NotificationManager.IMPORTANCE_DEFAULT,
+        )
+        channel.setSound(null, null)
+        channel.enableVibration(false)
+        val manager = getSystemService(android.app.NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
+    }
 
     /**
      * Handles emoji selection from picker.

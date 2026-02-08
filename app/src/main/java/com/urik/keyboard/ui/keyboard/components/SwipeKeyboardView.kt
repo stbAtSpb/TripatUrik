@@ -70,6 +70,7 @@ class SwipeKeyboardView
         private var onBackspacePressed: (() -> Unit)? = null
         private var onSpacebarCursorMove: ((Int) -> Unit)? = null
         private var onBackspaceSwipeDelete: (() -> Unit)? = null
+        private var onScreenshotClick: (() -> Unit)? = null
         private val keyViews = mutableListOf<Button>()
         private val keyPositions = mutableMapOf<Button, Rect>()
         private val keyMapping = mutableMapOf<Button, KeyboardKey>()
@@ -87,6 +88,7 @@ class SwipeKeyboardView
         private var suggestionBar: LinearLayout? = null
 
         private var emojiButton: TextView? = null
+        private var screenshotButton: TextView? = null
 
         private var isSwipeActive = false
         private var touchStartPoint: PointF? = null
@@ -159,6 +161,12 @@ class SwipeKeyboardView
             OnClickListener {
                 if (isDestroyed) return@OnClickListener
                 showEmojiPicker()
+            }
+
+        private val screenshotButtonClickListener =
+            OnClickListener {
+                if (isDestroyed) return@OnClickListener
+                onScreenshotClick?.invoke()
             }
 
         private val emojiPickedListener =
@@ -856,6 +864,12 @@ class SwipeKeyboardView
             }
         }
 
+        fun setOnScreenshotClickListener(listener: () -> Unit) {
+            if (!isDestroyed) {
+                this.onScreenshotClick = listener
+            }
+        }
+
         fun setPunctuationPopupActive(active: Boolean) {
             punctuationPopupActive = active
         }
@@ -912,6 +926,7 @@ class SwipeKeyboardView
 
             suggestionBar?.let { bar ->
                 val emojiBtn = emojiButton
+                val screenshotBtn = screenshotButton
 
                 returnSuggestionViewsToPool()
 
@@ -925,6 +940,13 @@ class SwipeKeyboardView
                             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
                         }
                     bar.addView(spacer)
+                }
+
+                screenshotBtn?.let { btn ->
+                    if (btn.parent != null) {
+                        (btn.parent as? ViewGroup)?.removeView(btn)
+                    }
+                    bar.addView(btn)
                 }
 
                 emojiBtn?.let { btn ->
@@ -1173,6 +1195,7 @@ class SwipeKeyboardView
             isShowingAutofillSuggestions = false
             autofillIndicatorIcon?.visibility = GONE
             emojiButton?.visibility = VISIBLE
+            screenshotButton?.visibility = VISIBLE
             updateSuggestionBarContent(emptyList())
             safeMappingPost()
         }
@@ -1197,6 +1220,7 @@ class SwipeKeyboardView
                     isShowingAutofillSuggestions = false
                     autofillIndicatorIcon?.visibility = GONE
                     emojiButton?.visibility = VISIBLE
+                    screenshotButton?.visibility = VISIBLE
                     updateSuggestionBarContent(emptyList())
                     return
                 }
@@ -1204,6 +1228,7 @@ class SwipeKeyboardView
                 isShowingAutofillSuggestions = true
 
                 emojiButton?.visibility = GONE
+                screenshotButton?.visibility = GONE
 
                 val indicator = getOrCreateAutofillIndicator()
                 indicator.visibility = if (showIndicator) VISIBLE else GONE
@@ -1244,6 +1269,13 @@ class SwipeKeyboardView
                         (divider.parent as? ViewGroup)?.removeView(divider)
                         bar.addView(divider, dividerParams)
                     }
+                }
+
+                screenshotButton?.let { btn ->
+                    if (btn.parent != null) {
+                        (btn.parent as? ViewGroup)?.removeView(btn)
+                    }
+                    bar.addView(btn)
                 }
 
                 emojiButton?.let { btn ->
@@ -1395,6 +1427,43 @@ class SwipeKeyboardView
                             themeManager!!
                                 .currentTheme.value.colors.suggestionBarBackground,
                         )
+
+                        screenshotButton =
+                            TextView(context).apply {
+                                val screenshotDrawable = ContextCompat.getDrawable(context, R.drawable.ic_screenshot)
+                                screenshotDrawable?.setTint(
+                                    themeManager!!
+                                        .currentTheme.value.colors.keyTextAction,
+                                )
+
+                                setCompoundDrawablesRelativeWithIntrinsicBounds(screenshotDrawable, null, null, null)
+
+                                val btnTextSize = calculateResponsiveSuggestionTextSize()
+
+                                val padding = (btnTextSize * context.resources.displayMetrics.density * 0.8f).toInt()
+                                setPadding(padding, padding, padding, padding)
+                                setBackgroundColor(
+                                    themeManager!!
+                                        .currentTheme.value.colors.keyBackgroundAction,
+                                )
+
+                                contentDescription = context.getString(R.string.action_screenshot)
+
+                                setOnClickListener(screenshotButtonClickListener)
+
+                                layoutParams =
+                                    LinearLayout
+                                        .LayoutParams(
+                                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                                            0f,
+                                        ).apply {
+                                            gravity = Gravity.END
+                                            marginStart = context.resources.getDimensionPixelSize(R.dimen.key_margin_horizontal)
+                                        }
+                            }
+
+                        addView(screenshotButton)
 
                         emojiButton =
                             TextView(context).apply {
@@ -2029,6 +2098,7 @@ class SwipeKeyboardView
             }
             suggestionBar = null
             emojiButton = null
+            screenshotButton = null
             emojiSearchInput = null
 
             searchScopeJob?.cancel()

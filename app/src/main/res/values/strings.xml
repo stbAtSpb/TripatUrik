@@ -247,6 +247,13 @@
     <string name="action_previous_description">Move to previous field</string>
 
     <string name="action_emoji">Emoji</string>
+    <string name="action_screenshot">Share screenshot</string>
+    <string name="screenshot_permission_denied">Screen capture permission denied</string>
+    <string name="screenshot_save_failed">Failed to save screenshot</string>
+    <string name="screenshot_capture_failed">Failed to capture screen</string>
+    <string name="screenshot_share_title">Share screenshot</string>
+    <string name="screenshot_notification_channel">Screenshot capture</string>
+    <string name="screenshot_notification_title">Capturing screenshot…</string>
     <string name="emoji_search_hint" tools:ignore="TypographyEllipsis">Search emojis...</string>
     <string name="autofill_indicator_description">Password manager suggestions available</string>
 
