@@ -19,6 +19,7 @@ import com.urik.keyboard.settings.languages.LanguagesFragment
 import com.urik.keyboard.settings.layoutinput.LayoutInputFragment
 import com.urik.keyboard.settings.privacydata.PrivacyDataFragment
 import com.urik.keyboard.settings.typingbehavior.TypingBehaviorFragment
+import com.urik.keyboard.ui.concentric.ConcentricBenchmarkActivity
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -200,6 +201,18 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
                 summary = resources.getString(R.string.dictionary_attribution_summary)
                 setOnPreferenceClickListener {
                     startActivity(Intent(context, DictionaryAttributionActivity::class.java))
+                    true
+                }
+            },
+        )
+
+        screen.addPreference(
+            Preference(context).apply {
+                key = "concentric_benchmark"
+                title = resources.getString(R.string.concentric_benchmark_title)
+                summary = resources.getString(R.string.concentric_benchmark_summary)
+                setOnPreferenceClickListener {
+                    startActivity(Intent(context, ConcentricBenchmarkActivity::class.java))
                     true
                 }
             },

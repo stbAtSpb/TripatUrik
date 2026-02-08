@@ -98,6 +98,11 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <activity
+            android:name=".ui.concentric.ConcentricBenchmarkActivity"
+            android:exported="false"
+            android:label="@string/concentric_benchmark_title" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
