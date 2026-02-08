@@ -259,6 +259,7 @@
     <string name="concentric_benchmark_title">Concentric Benchmark</string>
     <string name="concentric_benchmark_summary">Phase 0: SurfaceView rendering test (30 bubbles, 3 rings, 60fps target)</string>
     <string name="concentric_benchmark_info">Phase 0 — 30 static bubbles on 3 rings. FPS counter top-left. Target: sustained 60fps, frame time &lt; 12ms.</string>
+    <string name="concentric_benchmark_info_phase1">Phase 1 — Dynamic layout with anti-occlusion. Add bubbles, run stress test (50 bubbles). Target: 0 overlaps, layout &lt; 8ms, 60fps.</string>
 
     <string name="emoji_search_hint" tools:ignore="TypographyEllipsis">Search emojis...</string>
     <string name="autofill_indicator_description">Password manager suggestions available</string>
