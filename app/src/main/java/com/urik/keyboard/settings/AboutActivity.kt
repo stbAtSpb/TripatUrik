@@ -137,36 +137,39 @@ class AboutActivity : AppCompatActivity() {
 
         val text =
             """
+            eX²Libris v0.1.0-beta
+
             ${getString(R.string.about_version)}: $versionName ($versionCode)
 
+            Developer: Steven Nodock
             ${getString(R.string.about_copyright)}
             ${getString(R.string.about_license)}
 
             ${getString(R.string.about_source_code)}
-            https://github.com/urikdev/Urik
+            https://github.com/stbAtSpb/TripatUrik
 
             ${getString(R.string.about_release_notes)}
-            https://github.com/urikdev/Urik/releases
+            https://github.com/stbAtSpb/TripatUrik/releases
 
             ${getString(R.string.about_report_bug)}
-            https://github.com/urikdev/Urik/issues
+            https://github.com/stbAtSpb/TripatUrik/issues
 
             ${getString(R.string.about_privacy_policy)}
-            https://github.com/urikdev/Urik/blob/main/PRIVACY.md
+            https://github.com/stbAtSpb/TripatUrik/blob/main/PRIVACY.md
 
             ${getString(R.string.about_support)}
-            https://buymeacoffee.com/urikdevelopment
+            https://github.com/sponsors/stbAtSpb
             """.trimIndent()
 
         val spannable = SpannableString(text)
 
         val links =
             listOf(
-                "https://github.com/urikdev/Urik",
-                "https://github.com/urikdev/Urik/releases",
-                "https://github.com/urikdev/Urik/issues",
-                "https://github.com/urikdev/Urik/blob/main/PRIVACY.md",
-                "https://buymeacoffee.com/urikdevelopment",
+                "https://github.com/stbAtSpb/TripatUrik",
+                "https://github.com/stbAtSpb/TripatUrik/releases",
+                "https://github.com/stbAtSpb/TripatUrik/issues",
+                "https://github.com/stbAtSpb/TripatUrik/blob/main/PRIVACY.md",
+                "https://github.com/sponsors/stbAtSpb",
             )
 
         links.forEach { url ->
