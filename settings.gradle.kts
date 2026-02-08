@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Urik"
+rootProject.name = "eX2Libris"
 include(":app")

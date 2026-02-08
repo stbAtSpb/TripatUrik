@@ -67,6 +67,21 @@ class SemanticGraphOverlay
         private var selectionFlashAlpha = 0f
         private var selectionFlashAnimator: ValueAnimator? = null
 
+        // Magnetic animation state
+        private data class AnimatedNode(
+            val node: GraphNode,
+            val startX: Float,      // exploded initial position (percent)
+            val startY: Float,
+            val targetX: Float,     // PCA target position (percent) = node.xPercent
+            val targetY: Float,     // = node.yPercent
+            val vibFreq: Float,     // vibration frequency (2-5 Hz)
+            val vibPhase: Float,    // vibration phase (0..2π)
+        )
+
+        private var animatedNodes: List<AnimatedNode> = emptyList()
+        private var animationStartTime: Long = 0L
+        private var isAnimating: Boolean = false
+
         // DNA/RNA sentence context words (left side spiral)
         private var contextWords: List<String> = emptyList()
 
@@ -173,7 +188,63 @@ class SemanticGraphOverlay
             // After re-projection, reset the visual rotation since the PCA already includes the angle
             liveRotationDelta = 0f
             cumulativeRotation = 0f
-            Log.d(TAG, "setNodes: anchor='$anchorWord' | nodes=${nodes.size}")
+
+            // Build animated nodes: compute start positions
+            val oldAnimated = animatedNodes
+            val now = System.currentTimeMillis()
+            animatedNodes = projectedNodes.map { node ->
+                val targetX = node.xPercent
+                val targetY = node.yPercent
+                // Derive deterministic vibration parameters from word hash
+                val hash = node.word.hashCode()
+                val vibFreq = 2f + (hash and 0xFF) / 255f * 3f       // 2-5 Hz
+                val vibPhase = ((hash shr 8) and 0xFF) / 255f * (2f * Math.PI.toFloat())
+
+                // Compute start position
+                val (startX, startY) = if (oldAnimated.isEmpty()) {
+                    // First appearance: explode from center
+                    val dx = targetX - CENTER_X_PERCENT
+                    val dy = targetY - CENTER_Y_PERCENT
+                    Pair(
+                        CENTER_X_PERCENT + dx * EXPLODE_FACTOR,
+                        CENTER_Y_PERCENT + dy * EXPLODE_FACTOR,
+                    )
+                } else {
+                    // Re-projection: use interpolated current position of matching old node
+                    val elapsed = (now - animationStartTime).toFloat()
+                    val oldNode = oldAnimated.find { it.node.word == node.word }
+                    if (oldNode != null) {
+                        val t = (elapsed / STABILIZATION_DURATION_MS).coerceIn(0f, 1f)
+                        val progress = easeOutExpo(t)
+                        Pair(
+                            lerp(oldNode.startX, oldNode.targetX, progress),
+                            lerp(oldNode.startY, oldNode.targetY, progress),
+                        )
+                    } else {
+                        // New node not in old set: explode from center
+                        val dx = targetX - CENTER_X_PERCENT
+                        val dy = targetY - CENTER_Y_PERCENT
+                        Pair(
+                            CENTER_X_PERCENT + dx * EXPLODE_FACTOR,
+                            CENTER_Y_PERCENT + dy * EXPLODE_FACTOR,
+                        )
+                    }
+                }
+
+                AnimatedNode(
+                    node = node,
+                    startX = startX,
+                    startY = startY,
+                    targetX = targetX,
+                    targetY = targetY,
+                    vibFreq = vibFreq,
+                    vibPhase = vibPhase,
+                )
+            }
+            animationStartTime = now
+            isAnimating = true
+
+            Log.d(TAG, "setNodes: anchor='$anchorWord' | nodes=${nodes.size} | animating")
             nodeHitRects.clear()
             invalidate()
         }
@@ -294,22 +365,29 @@ class SemanticGraphOverlay
             val cosR = cos(totalRotation)
             val sinR = sin(totalRotation)
 
-            // Draw lines from anchor to nodes
-            for (node in nodes) {
-                val rawX = w * node.xPercent - centerX
-                val rawY = h * node.yPercent - centerY
-                val nx = centerX + rawX * cosR - rawY * sinR
-                val ny = centerY + rawX * sinR + rawY * cosR
-                linePaint.alpha = (fadeAlpha * 64).toInt()
-                canvas.drawLine(centerX, centerY, nx, ny, linePaint)
-            }
+            // Magnetic animation: compute interpolation progress
+            val now = System.currentTimeMillis()
+            val elapsed = (now - animationStartTime).toFloat()
+            val t = (elapsed / STABILIZATION_DURATION_MS).coerceIn(0f, 1f)
+            val progress = easeOutExpo(t)
+            val vibAmplitude = MAX_VIBRATION_DP * density * (1f - progress)
 
             // Draw nodes with language-specific colors and similarity-proportional size
             val hasBilingual = nodes.any { it.languageTag != nodes.firstOrNull()?.languageTag }
 
-            for ((index, node) in nodes.withIndex()) {
-                val rawX = w * node.xPercent - centerX
-                val rawY = h * node.yPercent - centerY
+            for ((index, anim) in animatedNodes.withIndex()) {
+                val node = anim.node
+                // Interpolate position with vibration
+                val interpX = lerp(anim.startX, anim.targetX, progress)
+                val interpY = lerp(anim.startY, anim.targetY, progress)
+                val vibX = sin(now * 0.001f * anim.vibFreq * 2f * Math.PI.toFloat() + anim.vibPhase) * vibAmplitude
+                val vibY = cos(now * 0.001f * anim.vibFreq * 0.7f * 2f * Math.PI.toFloat() + anim.vibPhase) * vibAmplitude
+                val animX = interpX + vibX / w  // convert dp vibration back to percent
+                val animY = interpY + vibY / h
+
+                // Apply rotation around center
+                val rawX = w * animX - centerX
+                val rawY = h * animY - centerY
                 val nx = centerX + rawX * cosR - rawY * sinR
                 val ny = centerY + rawX * sinR + rawY * cosR
 
@@ -356,6 +434,13 @@ class SemanticGraphOverlay
                         index,
                     ),
                 )
+            }
+
+            // Schedule next animation frame if still animating
+            if (isAnimating && t < 1f) {
+                postInvalidateOnAnimation()
+            } else if (isAnimating && t >= 1f) {
+                isAnimating = false
             }
 
             // Draw anchor node on top
@@ -670,6 +755,8 @@ class SemanticGraphOverlay
             onRotationCompleted = null
             onMultiTouchStateChanged = null
             nodes = emptyList()
+            animatedNodes = emptyList()
+            isAnimating = false
             contextWords = emptyList()
             isLoading = false
             cumulativeRotation = 0f
@@ -683,11 +770,24 @@ class SemanticGraphOverlay
             super.onDetachedFromWindow()
         }
 
+        private fun easeOutExpo(t: Float): Float {
+            return if (t >= 1f) 1f else 1f - Math.pow(2.0, (-10.0 * t)).toFloat()
+        }
+
+        private fun lerp(start: Float, end: Float, t: Float): Float {
+            return start + (end - start) * t
+        }
+
         companion object {
             private const val TAG = "SemGraph.Overlay"
             const val CROSS_FADE_DURATION = 400L
             private const val SWIPE_DOWN_THRESHOLD = 80f
             private const val NEOLOGISM_ANGLE_THRESHOLD = 5.0 // degrees
             private const val SELECTION_FLASH_DURATION = 350L
+            private const val STABILIZATION_DURATION_MS = 3000L
+            private const val MAX_VIBRATION_DP = 4f
+            private const val EXPLODE_FACTOR = 1.8f
+            private const val CENTER_X_PERCENT = 0.5f
+            private const val CENTER_Y_PERCENT = 0.45f
         }
     }
