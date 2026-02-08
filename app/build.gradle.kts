@@ -10,6 +10,10 @@ plugins {
     id("org.jetbrains.kotlinx.kover")
 }
 
+base {
+    archivesName = "ex2libris"
+}
+
 android {
     namespace = "com.urik.keyboard"
     compileSdk = 35
@@ -19,7 +23,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 52
-        versionName = "0.17.0-beta"
+        versionName = "0.1.0-beta"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

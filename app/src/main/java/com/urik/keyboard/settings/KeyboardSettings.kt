@@ -126,7 +126,7 @@ data class KeyboardSettings(
     val keySize: KeySize = KeySize.MEDIUM,
     val keyLabelSize: KeyLabelSize = KeyLabelSize.MEDIUM,
     val cursorSpeed: CursorSpeed = CursorSpeed.MEDIUM,
-    val keyboardTheme: String = "default",
+    val keyboardTheme: String = "bisca",
     val favoriteThemes: Set<String> = emptySet(),
     val alternativeKeyboardLayout: AlternativeKeyboardLayout = AlternativeKeyboardLayout.DEFAULT,
     val adaptiveKeyboardModesEnabled: Boolean = true,

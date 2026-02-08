@@ -201,7 +201,7 @@ class SettingsRepository
                                     CursorSpeed.MEDIUM
                                 }
                             } ?: CursorSpeed.MEDIUM,
-                        keyboardTheme = preferences[PreferenceKeys.KEYBOARD_THEME] ?: "default",
+                        keyboardTheme = preferences[PreferenceKeys.KEYBOARD_THEME] ?: "bisca",
                         favoriteThemes = preferences[PreferenceKeys.FAVORITE_THEMES] ?: emptySet(),
                         alternativeKeyboardLayout =
                             preferences[PreferenceKeys.ALTERNATIVE_KEYBOARD_LAYOUT]?.let {
