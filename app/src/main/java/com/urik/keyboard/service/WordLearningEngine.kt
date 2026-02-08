@@ -835,6 +835,7 @@ class WordLearningEngine
                 WordSource.AUTO_CORRECTED -> InputMethod.TYPED
                 WordSource.IMPORTED -> InputMethod.TYPED
                 WordSource.SYSTEM_DEFAULT -> InputMethod.TYPED
+                WordSource.NEOLOGISM -> InputMethod.SELECTED_FROM_SUGGESTION
             }
 
         /**

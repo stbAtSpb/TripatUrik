@@ -168,4 +168,7 @@ enum class WordSource {
 
     /** Pre-loaded common word */
     SYSTEM_DEFAULT,
+
+    /** Generated via bilingual blending */
+    NEOLOGISM,
 }

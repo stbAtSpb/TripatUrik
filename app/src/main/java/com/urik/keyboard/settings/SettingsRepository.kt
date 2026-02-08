@@ -75,6 +75,7 @@ class SettingsRepository
             val KEYBOARD_DISPLAY_MODE = stringPreferencesKey("keyboard_display_mode")
             val ONE_HANDED_MODE_ENABLED = booleanPreferencesKey("one_handed_mode_enabled")
             val SHOW_LANGUAGE_SWITCH_KEY = booleanPreferencesKey("show_language_switch_key")
+            val BILINGUAL_GRAPH_ENABLED = booleanPreferencesKey("bilingual_graph_enabled")
         }
 
         /**
@@ -227,6 +228,7 @@ class SettingsRepository
                             },
                         oneHandedModeEnabled = preferences[PreferenceKeys.ONE_HANDED_MODE_ENABLED] ?: false,
                         showLanguageSwitchKey = preferences[PreferenceKeys.SHOW_LANGUAGE_SWITCH_KEY] ?: false,
+                        bilingualGraphEnabled = preferences[PreferenceKeys.BILINGUAL_GRAPH_ENABLED] ?: false,
                     ).validated()
                 }.catch { e ->
                     ErrorLogger.logException(
@@ -606,6 +608,14 @@ class SettingsRepository
         suspend fun updateShowLanguageSwitchKey(enabled: Boolean): Result<Unit> =
             try {
                 dataStore.edit { it[PreferenceKeys.SHOW_LANGUAGE_SWITCH_KEY] = enabled }
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+
+        suspend fun updateBilingualGraphEnabled(enabled: Boolean): Result<Unit> =
+            try {
+                dataStore.edit { it[PreferenceKeys.BILINGUAL_GRAPH_ENABLED] = enabled }
                 Result.success(Unit)
             } catch (e: Exception) {
                 Result.failure(e)

@@ -110,6 +110,7 @@ class ThemeManager(
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                 add(generateMaterialYouTheme())
             }
+            add(Biscarosse)
             add(Abyss)
             add(Crimson)
             add(Forest)

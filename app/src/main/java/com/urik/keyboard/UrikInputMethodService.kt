@@ -2,6 +2,7 @@ package com.urik.keyboard
 
 import android.annotation.SuppressLint
 import android.graphics.Color
+import android.util.Log
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.text.SpannableString
@@ -50,8 +51,12 @@ import com.urik.keyboard.service.TextInputProcessor
 import com.urik.keyboard.service.WordLearningEngine
 import com.urik.keyboard.service.WordState
 import com.urik.keyboard.settings.KeyboardSettings
+import com.urik.keyboard.ml.FastTextEngine
+import com.urik.keyboard.ml.NeologismGenerator
+import com.urik.keyboard.ml.PcaProjector
 import com.urik.keyboard.settings.SettingsRepository
 import com.urik.keyboard.theme.ThemeManager
+import com.urik.keyboard.ui.concentric.SemanticGraphOverlay
 import com.urik.keyboard.ui.keyboard.KeyboardViewModel
 import com.urik.keyboard.ui.keyboard.components.ClipboardPanel
 import com.urik.keyboard.ui.keyboard.components.KeyboardLayoutManager
@@ -97,6 +102,8 @@ class UrikInputMethodService :
         NORMAL,
         AWAITING_CONFIRMATION,
     }
+
+    private val TAG_SEM = "SemGraph.Service"
 
     @Inject
     lateinit var repository: KeyboardRepository
@@ -154,6 +161,12 @@ class UrikInputMethodService :
 
     @Inject
     lateinit var swipeSpaceManager: com.urik.keyboard.service.SwipeSpaceManager
+
+    @Inject
+    lateinit var fastTextEngine: FastTextEngine
+
+    @Inject
+    lateinit var neologismGenerator: NeologismGenerator
 
     private lateinit var viewModel: KeyboardViewModel
     private lateinit var layoutManager: KeyboardLayoutManager
@@ -516,6 +529,9 @@ class UrikInputMethodService :
                 currentInputConnection?.commitText(" ", 1)
                 clearInternalStateOnly()
                 showBigramPredictions()
+                if (wordToLearn != null) {
+                    triggerSemanticGraph(wordToLearn)
+                }
             } catch (_: Exception) {
                 currentInputConnection?.finishComposingText()
                 currentInputConnection?.commitText(" ", 1)
@@ -753,6 +769,7 @@ class UrikInputMethodService :
 
                     coordinateStateClear()
                     showBigramPredictions()
+                    triggerSemanticGraph(suggestion)
 
                     val textBefore = safeGetTextBeforeCursor(50)
                     viewModel.checkAndApplyAutoCapitalization(textBefore, currentSettings.autoCapitalizationEnabled)
@@ -1058,6 +1075,12 @@ class UrikInputMethodService :
                     }
                     setOnBackspaceSwipeDeleteListener {
                         handleBackspaceSwipeDelete()
+                    }
+                    setOnSemanticWordSelectedListener { word ->
+                        handleSemanticWordSelected(word)
+                    }
+                    setOnRotationCompletedListener { angle ->
+                        handleSemanticRotation(angle)
                     }
                 }
 
@@ -1553,6 +1576,13 @@ class UrikInputMethodService :
      */
     private fun handleKeyPress(key: KeyboardKey) {
         try {
+            // Guard: if semantic graph is visible, hide it and consume the key event
+            if (swipeKeyboardView?.isSemanticGraphShowing() == true) {
+                Log.d(TAG_SEM, "handleKeyPress BLOCKED: graph visible, hiding graph | key=$key")
+                swipeKeyboardView?.hideSemanticGraph()
+                return
+            }
+
             clearBigramPredictions()
 
             if (swipeKeyboardView?.handleSearchInput(key) == true) {
@@ -2052,6 +2082,205 @@ class UrikInputMethodService :
         }
     }
 
+    private fun handleSemanticWordSelected(word: String) {
+        Log.d(TAG_SEM, "handleSemanticWordSelected: '$word' → commit + reset state + hide")
+        serviceScope.launch {
+            withContext(Dispatchers.Main) {
+                // Clear any pending spell/composing state before inserting
+                clearInternalStateOnly()
+                currentInputConnection?.finishComposingText()
+
+                // Insert the selected word with trailing space
+                currentInputConnection?.commitText("$word ", 1)
+
+                // Update bigram predictions based on inserted word
+                showBigramPredictions()
+
+                // Hide the graph and return to keyboard
+                swipeKeyboardView?.hideSemanticGraph()
+
+                Log.d(TAG_SEM, "handleSemanticWordSelected: done | state cleared, bigrams updated")
+            }
+        }
+    }
+
+    // Cached state for PCA re-projection during rotation
+    private var lastAnchorWord: String = ""
+    private var lastAnchorVec: FloatArray? = null
+    private var lastNeighbors: List<Pair<String, FloatArray>> = emptyList()
+    private var lastLangTags: List<String> = emptyList()
+    private var lastSims: List<Float> = emptyList()
+
+    /**
+     * Extract previous words from the text before cursor for DNA spiral context.
+     * Must be called on Main thread (accesses InputConnection).
+     */
+    private fun extractSentenceContextWords(currentWord: String): List<String> {
+        val textBefore = safeGetTextBeforeCursor(200)
+        if (textBefore.isBlank()) return emptyList()
+
+        // Split by whitespace and punctuation, filter valid words
+        val words = textBefore.trim()
+            .split(Regex("[\\s.,;:!?()\\[\\]{}\"']+"))
+            .filter { it.length >= 2 && it.all { c -> c.isLetter() } }
+            .map { it.lowercase() }
+
+        // Remove the current word if it's at the end
+        val filtered = if (words.lastOrNull() == currentWord.lowercase()) {
+            words.dropLast(1)
+        } else {
+            words
+        }
+
+        // Return last 8 unique words
+        return filtered.distinct().takeLast(8)
+    }
+
+    private fun handleSemanticRotation(angleRad: Float) {
+        val anchor = lastAnchorWord
+        val anchorVec = lastAnchorVec ?: return
+        val neighbors = lastNeighbors
+        if (neighbors.isEmpty()) return
+
+        Log.d(TAG_SEM, "handleSemanticRotation: ${Math.toDegrees(angleRad.toDouble()).toInt()}° for '$anchor'")
+
+        serviceScope.launch {
+            try {
+                val projections = withContext(Dispatchers.Default) {
+                    PcaProjector.project(anchorVec, neighbors, lastLangTags, lastSims, angleRad)
+                }
+
+                val graphNodes = projections.map { proj ->
+                    SemanticGraphOverlay.GraphNode(
+                        word = proj.word,
+                        xPercent = proj.x,
+                        yPercent = proj.y,
+                        languageTag = proj.languageTag,
+                        similarity = proj.similarity,
+                    )
+                }
+
+                withContext(Dispatchers.Main) {
+                    swipeKeyboardView?.setSemanticGraphNodes(anchor, graphNodes)
+                }
+                Log.d(TAG_SEM, "handleSemanticRotation: re-projected ${projections.size} nodes")
+            } catch (e: Exception) {
+                Log.e(TAG_SEM, "handleSemanticRotation: error", e)
+            }
+        }
+    }
+
+    private fun triggerSemanticGraph(completedWord: String) {
+        if (completedWord.isBlank() || completedWord.length < 2) {
+            Log.d(TAG_SEM, "triggerSemanticGraph SKIP: word='$completedWord' (blank or <2 chars)")
+            return
+        }
+        if (swipeKeyboardView?.isSemanticGraphShowing() == true) {
+            Log.d(TAG_SEM, "triggerSemanticGraph SKIP: graph already visible")
+            return
+        }
+        Log.d(TAG_SEM, "triggerSemanticGraph: '$completedWord'")
+        swipeKeyboardView?.showSemanticGraph(completedWord)
+
+        // Launch async computation of real FastText neighbors + PCA projection
+        serviceScope.launch {
+            try {
+                val settings = settingsRepository.settings.first()
+                val primaryLang = languageManager.currentLanguage.value
+                val isBilingual = settings.bilingualGraphEnabled
+                val k = 8
+
+                // Ensure language(s) loaded
+                if (!fastTextEngine.isLoaded(primaryLang)) {
+                    Log.d(TAG_SEM, "triggerSemanticGraph: loading $primaryLang vectors...")
+                    fastTextEngine.loadLanguage(primaryLang)
+                }
+                if (isBilingual) {
+                    val secondaryLang = if (primaryLang == "fr") "en" else "fr"
+                    if (!fastTextEngine.isLoaded(secondaryLang)) {
+                        Log.d(TAG_SEM, "triggerSemanticGraph: loading $secondaryLang vectors...")
+                        fastTextEngine.loadLanguage(secondaryLang)
+                    }
+                }
+
+                // Find nearest neighbors
+                val startMs = System.currentTimeMillis()
+                val scored = if (isBilingual) {
+                    val secondaryLang = if (primaryLang == "fr") "en" else "fr"
+                    fastTextEngine.findKNearestBilingual(completedWord, primaryLang, secondaryLang, k)
+                } else {
+                    fastTextEngine.findKNearest(completedWord, primaryLang, k)
+                }
+
+                if (scored.isEmpty()) {
+                    Log.d(TAG_SEM, "triggerSemanticGraph: no neighbors found for '$completedWord'")
+                    return@launch
+                }
+
+                // Get anchor vector for PCA
+                val anchorVec = if (isBilingual) {
+                    fastTextEngine.getAlignedVector(completedWord, primaryLang)
+                } else {
+                    fastTextEngine.getVector(completedWord, primaryLang)
+                }
+                if (anchorVec == null) {
+                    Log.d(TAG_SEM, "triggerSemanticGraph: no vector for anchor '$completedWord'")
+                    return@launch
+                }
+
+                // Get neighbor vectors
+                val neighbors = scored.mapNotNull { sw ->
+                    val vec = if (isBilingual) {
+                        fastTextEngine.getAlignedVector(sw.word, sw.languageTag)
+                    } else {
+                        fastTextEngine.getVector(sw.word, sw.languageTag)
+                    }
+                    vec?.let { sw.word to it }
+                }
+                val langTags = scored.take(neighbors.size).map { it.languageTag }
+                val sims = scored.take(neighbors.size).map { it.similarity }
+
+                // Cache for rotation re-projection
+                lastAnchorWord = completedWord
+                lastAnchorVec = anchorVec
+                lastNeighbors = neighbors
+                lastLangTags = langTags
+                lastSims = sims
+
+                // Project to 2D via PCA
+                val projections = withContext(Dispatchers.Default) {
+                    PcaProjector.project(anchorVec, neighbors, langTags, sims)
+                }
+
+                val elapsed = System.currentTimeMillis() - startMs
+                Log.d(TAG_SEM, "triggerSemanticGraph: ${projections.size} nodes projected in ${elapsed}ms")
+
+                // Convert to GraphNodes and update overlay
+                val graphNodes = projections.map { proj ->
+                    SemanticGraphOverlay.GraphNode(
+                        word = proj.word,
+                        xPercent = proj.x,
+                        yPercent = proj.y,
+                        languageTag = proj.languageTag,
+                        similarity = proj.similarity,
+                    )
+                }
+
+                // Extract sentence context words for DNA spiral
+                val sentenceContext = withContext(Dispatchers.Main) {
+                    extractSentenceContextWords(completedWord)
+                }
+
+                withContext(Dispatchers.Main) {
+                    swipeKeyboardView?.setSemanticGraphContextWords(sentenceContext)
+                    swipeKeyboardView?.setSemanticGraphNodes(completedWord, graphNodes)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG_SEM, "triggerSemanticGraph: error computing graph", e)
+            }
+        }
+    }
+
     /**
      * Handles suggestion removal via long press.
      *
@@ -2227,6 +2456,13 @@ class UrikInputMethodService :
      */
     private fun handleBackspace() {
         try {
+            // Guard: if semantic graph is visible, hide it and consume backspace
+            if (swipeKeyboardView?.isSemanticGraphShowing() == true) {
+                Log.d(TAG_SEM, "handleBackspace BLOCKED: graph visible, hiding graph")
+                swipeKeyboardView?.hideSemanticGraph()
+                return
+            }
+
             val actualCursorPos = safeGetCursorPosition()
 
             if (displayBuffer.isNotEmpty() && composingRegionStart != -1) {
@@ -2656,6 +2892,13 @@ class UrikInputMethodService :
      * Handles space key press.
      */
     private fun handleSpace() {
+        // Guard: if semantic graph is visible, hide it and consume space
+        if (swipeKeyboardView?.isSemanticGraphShowing() == true) {
+            Log.d(TAG_SEM, "handleSpace BLOCKED: graph visible, hiding graph")
+            swipeKeyboardView?.hideSemanticGraph()
+            return
+        }
+
         serviceScope.launch {
             try {
                 if (requiresDirectCommit) {
@@ -2723,7 +2966,8 @@ class UrikInputMethodService :
                             val isValid = textInputProcessor.validateWord(wordState.normalizedBuffer)
                             if (isValid) {
                                 isActivelyEditing = true
-                                recordWordUsage(wordState.normalizedBuffer)
+                                val completedWord = wordState.normalizedBuffer
+                                recordWordUsage(completedWord)
                                 currentInputConnection?.beginBatchEdit()
                                 try {
                                     autoCapitalizePronounI()
@@ -2731,6 +2975,7 @@ class UrikInputMethodService :
                                     currentInputConnection?.commitText(" ", 1)
                                     clearInternalStateOnly()
                                     showBigramPredictions()
+                                    triggerSemanticGraph(completedWord)
 
                                     val textBefore =
                                         safeGetTextBeforeCursor(50)
@@ -2762,6 +3007,7 @@ class UrikInputMethodService :
                     }
                 }
 
+                val fallbackWord = displayBuffer
                 currentInputConnection?.beginBatchEdit()
                 try {
                     autoCapitalizePronounI()
@@ -2769,6 +3015,7 @@ class UrikInputMethodService :
                     currentInputConnection?.commitText(" ", 1)
                     clearInternalStateOnly()
                     showBigramPredictions()
+                    triggerSemanticGraph(fallbackWord)
 
                     val textBefore = safeGetTextBeforeCursor(50)
                     viewModel.checkAndApplyAutoCapitalization(textBefore, currentSettings.autoCapitalizationEnabled)
@@ -3292,6 +3539,13 @@ class UrikInputMethodService :
         }
     } catch (_: Exception) {
         null
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+            fastTextEngine.onTrimMemory(languageManager.currentLanguage.value)
+        }
     }
 
     override fun onDestroy() {

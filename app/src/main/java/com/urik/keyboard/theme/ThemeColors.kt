@@ -20,4 +20,6 @@ data class ThemeColors(
     val swipePrimary: Int,
     val swipeSecondary: Int,
     val swipeCurrent: Int,
+    val semanticNodeFrench: Int = 0xFF_3A7CA5.toInt(),
+    val semanticNodeEnglish: Int = 0xFF_C75050.toInt(),
 )

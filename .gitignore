@@ -90,3 +90,7 @@ navigation.json
 
 # F-Droid metadata
 com.urik.keyboard.yml
+
+# Large FastText source files (pre-processing data)
+tools/data/*.gz
+tools/data/*.vec

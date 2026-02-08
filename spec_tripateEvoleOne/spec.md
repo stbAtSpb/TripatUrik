@@ -304,28 +304,141 @@ La transition entre les deux modes se fait par un cross-fade progressif (~400ms)
 ```
 Mode Clavier (opacite 100%)
      │
-     │ declencheur: long-press sur suggestion / geste dedie
+     │ declencheur: validation d'un mot complet (espace ou selection suggestion)
+     │              - mot valide du dictionnaire + espace
+     │              - mot inconnu accepte par espace (confirmation spell)
+     │              - selection d'une suggestion dans la barre
      │
-     ▼ cross-fade 400ms
-     │  - clavier: opacite 100% → 0%
-     │  - graphe:  opacite 0% → 100%
+     ▼ cross-fade 400ms (DecelerateInterpolator)
+     │  - clavier (keyboardView.alpha): 100% → 0%
+     │  - graphe (SemanticGraphOverlay.alpha):  0% → 100%
      │
 Mode Graphe Semantique (opacite 100%)
      │
-     │ retour: tap sur mot (insere + retour) / swipe down
+     │ auto-dismiss: 2 secondes sans interaction → retour automatique
+     │ (le timer se reset a chaque ACTION_DOWN sur le graphe)
+     │
+     │ retour explicite:
+     │   - tap sur un mot du graphe → insertion + retour
+     │   - swipe down (>80dp) → annulation, retour sans insertion
      │
      ▼ cross-fade 400ms inverse
      │
 Mode Clavier (opacite 100%)
 ```
 
-**Declencheurs vers le graphe** :
-- Long-press sur un mot de la barre de suggestions
-- Geste dedie (a definir : double-tap zone specifique, ou bouton)
+**Declencheurs vers le graphe (implementes)** :
+- Appui sur espace apres un mot valide (dictionnaire ou mot appris)
+- Appui sur espace pour confirmer un mot inconnu (etat AWAITING_CONFIRMATION → learnWord + graphe)
+- Selection d'une suggestion dans la barre de suggestions
+- Le mot valide/confirme devient le "mot ancre" du graphe semantique
 
 **Retour au clavier** :
-- Tap sur un mot du graphe → le mot est insere dans le champ de saisie, retour au clavier
-- Swipe vers le bas → annulation, retour au clavier sans insertion
+- Tap sur un mot du graphe → le mot est insere dans le champ de saisie + espace, retour au clavier
+- Swipe vers le bas (>80dp) → annulation, retour au clavier sans insertion
+- Auto-dismiss apres 2 secondes sans interaction tactile (timer resetable)
+
+### Phase 0 bis : Overlay Graphe Semantique + Cross-Fade (VALIDEE)
+
+**Objectif** : Valider la superposition technique overlay transparent + cross-fade fluide entre le clavier AZERTY et le graphe semantique, directement dans le vrai clavier.
+
+**Implementation realisee** :
+- `SemanticGraphOverlay.kt` : custom View dans `ui/concentric/`, dessine noeuds mock + lignes + mot ancre central
+- Donnees mock : map mot ancre → 8 noeuds voisins avec positions (x%, y%)
+- Cross-fade via `AnimatorSet` (2 `ValueAnimator` simultanes, 400ms, `DecelerateInterpolator`)
+- Overlay ajoute comme enfant du `SwipeKeyboardView` (FrameLayout), meme pattern que `SwipeOverlayView`
+- Detection tap sur noeuds via hit-rect, swipe-down dismiss (>80dp)
+- Auto-dismiss 2s sans interaction (timer `postDelayed`, reset sur `ACTION_DOWN`)
+- Declenchement : espace (mot valide + mot inconnu confirme) et selection suggestion
+- Logs `SemGraph.*` pour debug ADB
+
+**Criteres valides** :
+- Cross-fade fluide sans saccade (60fps pendant la transition)
+- Le graphe apparait apres validation d'un mot (espace / suggestion / confirmation spell)
+- Le clavier est invisible quand le graphe est affiche (alpha = 0)
+- Le graphe est invisible quand le clavier est actif (GONE)
+- Tap sur un noeud detecte correctement → insertion mot + retour clavier
+- Swipe down → retour clavier sans insertion
+- Auto-dismiss apres 2s d'inactivite
+- Retour au clavier restaure l'etat complet
+
+---
+
+## Architecture Dictionnaire & Apprentissage Contextuel
+
+### Stockage actuel des mots appris (Room/SQLite)
+
+Le dictionnaire utilisateur est deja stocke dans une **BDD SQLite locale via Room** :
+
+```
+Table: learned_words
+├── id (PK, autoGenerate)
+├── word (forme originale, casing preserve)
+├── word_normalized (NFC + normalisation langue)
+├── language_tag (fr, en, etc.)
+├── frequency (incremente a chaque usage)
+├── source (USER_TYPED, SWIPE_LEARNED, USER_SELECTED, AUTO_CORRECTED, IMPORTED)
+├── character_count (grapheme clusters)
+├── created_at (timestamp creation)
+└── last_used (timestamp dernier usage)
+
+Index: idx_exact_lookup (language_tag, word_normalized) UNIQUE
+Index: idx_frequency_recent (language_tag, frequency, last_used)
+Index: idx_cleanup (frequency, last_used)
+
+Table FTS4: learned_words_fts (content sync avec learned_words)
+└── Permet prefix matching et recherche full-text
+```
+
+**Moteur d'apprentissage** : `WordLearningEngine.kt` (Singleton Hilt)
+- Cache en memoire (`ConcurrentHashMap`) par langue
+- Mutex pour thread-safety des ecritures
+- Validation : longueur min/max, caracteres valides
+- Fuzzy search : edit distance <= 2 sur les mots frequents
+- Cooldown exponential en cas d'erreurs SQLite
+
+**Dictionnaire systeme** : `SpellCheckManager` utilise SymSpell (dictionnaire statique pre-charge) pour la validation orthographique. Les mots appris par l'utilisateur sont ajoutes au cache spell pour etre reconnus comme valides.
+
+### Vision : Historique conversationnel local (Phase future)
+
+**Objectif** : Permettre au graphe ACP de s'appuyer sur les habitudes de saisie reelles de l'utilisateur, en plus des proximites semantiques statiques (FastText). L'historique permet de ponderer les noeuds du graphe par la frequence d'usage contextuel de l'utilisateur.
+
+**Table proposee** :
+
+```
+Table: conversation_context (nouvelle)
+├── id (PK, autoGenerate)
+├── session_id (UUID, identifie une session de saisie)
+├── word (mot saisi)
+├── word_normalized
+├── preceding_word (mot precedent, pour bigrammes utilisateur)
+├── language_tag
+├── app_package (optionnel, contexte applicatif : messaging, email, notes...)
+├── timestamp
+└── input_method (typed, swiped, selected, semantic_graph)
+```
+
+**Exploitation pour le graphe ACP** :
+- Les bigrammes utilisateur (word, preceding_word) permettent de ponderer les aretes du graphe
+- La frequence d'usage par contexte applicatif (messaging vs email) permet d'adapter les suggestions
+- Le `input_method = semantic_graph` trace quels mots l'utilisateur a effectivement selectionnes via le graphe
+- L'historique alimente un modele de co-occurrence utilisateur qui se superpose aux vecteurs FastText statiques
+
+**Privacy et parametrage** :
+- **Aucune permission Android supplementaire requise** : l'historique ne capture que les mots saisis via le clavier Urik (InputMethodService a deja acces au texte saisi)
+- **Option parametrable dans les Settings** : `conversationHistoryEnabled` (defaut: true)
+- **Retention parametrable** : duree de retention (7j, 30j, 90j, illimite), nettoyage automatique via `cleanupOldHistory(cutoff)`
+- **Purge manuelle** : bouton "Effacer l'historique" dans les parametres
+- **Exclusion champs sensibles** : desactive automatiquement pour `EditorInfo.TYPE_TEXT_VARIATION_PASSWORD`, `TYPE_TEXT_VARIATION_VISIBLE_PASSWORD`, `TYPE_TEXT_VARIATION_WEB_PASSWORD`
+- **Pas de stockage du texte complet** : seuls les mots individuels et leurs paires (bigrammes) sont stockes, pas les phrases entieres
+
+**Phases d'implementation** :
+1. **Phase A** : Table `conversation_context` + enregistrement passif des mots saisis (pas d'exploitation)
+2. **Phase B** : Ponderation des noeuds du graphe par frequence utilisateur (bigrammes)
+3. **Phase C** : Adaptation contextuelle par app (messaging vs notes vs email)
+4. **Phase D** : Modele de co-occurrence temps reel qui influence la projection ACP
+
+---
 
 ### Extensibilite AR/XR (future-proofing)
 
@@ -341,6 +454,92 @@ L'architecture est concue pour etre extensible de 2D a 3D :
 - Android XR SDK (Galaxy XR, Project Moohan)
 - ARCore (smartphones compatibles)
 - La structure ComputeEngine produit deja des vecteurs N-dimensionnels, la projection 2D→3D est une operation terminale
+
+## Phase 1 : Moteur FastText + ACP Bilingue + Neologismes
+
+### Architecture
+
+Phase 1 remplace les donnees mock du `SemanticGraphOverlay` par de vrais embeddings FastText projetes en 2D via ACP (PCA), avec support bilingue francais/anglais et generation de neologismes par multi-touch.
+
+### Format `.uvec` (Urik VECtor)
+
+Format binaire compact pour embarquer les vecteurs FastText dans les assets (~13 MB/langue) :
+
+```
+Header (16 octets) :
+  - magic: 4 bytes = "UVEC"
+  - dimension: u16 (100)
+  - word_count: u32
+  - reserved: 6 bytes
+
+Vocabulary section :
+  - Pour chaque mot: [u16 length][utf8 bytes]
+  - Trie alphabetiquement pour recherche binaire
+
+Vector section :
+  - float16 contigus, chaque mot = dimension entrees
+  - Vecteurs L2-normalises a l'export
+```
+
+Conversion hors-ligne via `tools/convert_fasttext.py` (Python, pas dans l'APK).
+
+### Moteur FastText (`ml/FastTextEngine.kt`)
+
+- Chargement paresseux des `.uvec` au premier affichage du graphe semantique
+- Recherche k-NN par force brute sur vecteurs pre-normalises (cosinus = dot product)
+- 60k mots x 100 dims ~ 1.5ms/langue sur Snapdragon 855
+- Support MUSE alignment matrices pour espace vectoriel bilingue commun
+- Gestion pression memoire via `onTrimMemory()` : decharge langue secondaire
+
+### Projecteur ACP (`ml/PcaProjector.kt`)
+
+- Projection N vecteurs (8-20 voisins, 100D) en 2D via decomposition en composantes principales
+- Power iteration pour les 2 eigenvectors principaux (~25 iterations, <5ms)
+- Normalisation vers [0.1, 0.9] avec ancre au centre (0.5, 0.45)
+- Rotation optionnelle pour multi-pinch future
+
+### Mode Learning bilingue
+
+- Parametre `bilingualGraphEnabled` dans `KeyboardSettings` (defaut: false)
+- Monolingual (defaut) : graphe dans la langue courante uniquement
+- Bilingual : `findKNearestBilingual()` cherche dans FR+EN via MUSE alignment
+- Noeuds colores par langue : FR (bleu `semanticNodeFrench`), EN (rouge `semanticNodeEnglish`)
+- Legende en bas du graphe avec pastilles colorees
+
+### Generation de neologismes par multi-touch
+
+- Detection multi-touch : 2 doigts sur 2 noeuds de langues differentes
+- Disambiguation rotation vs neologisme : angle < 5 degres = neologisme, >= 5 = rotation PCA
+- 3 strategies : Portmanteau (chevauchement), Syllable Blend, Morpheme Mix
+- Score de naturalite : penalise clusters consonnes >3, favorise alternance voyelle-consonne
+- `WordSource.NEOLOGISM` ajoute pour l'apprentissage des mots generes
+
+### Fichiers crees
+
+| Fichier | Role |
+|---------|------|
+| `ml/VectorMath.kt` | Ops vectorielles sans allocation |
+| `ml/FastTextEngine.kt` | Chargement .uvec + k-NN cosinus |
+| `ml/PcaProjector.kt` | Projection ACP 2D + rotation |
+| `ml/NeologismGenerator.kt` | Fusion FR+EN → neologisme |
+| `tools/convert_fasttext.py` | Conversion .vec → .uvec (hors-ligne) |
+| `assets/vectors/*.uvec` | Vecteurs FastText (placeholder stubs) |
+| `assets/vectors/*.bin` | Matrices alignement MUSE (identity stubs) |
+
+### Fichiers modifies
+
+| Fichier | Changement |
+|---------|------------|
+| `SemanticGraphOverlay.kt` | Mock supprime, languageTag, rendu bilingue, multi-touch |
+| `ThemeColors.kt` | +2 couleurs : semanticNodeFrench, semanticNodeEnglish |
+| `KeyboardSettings.kt` | +1 champ : bilingualGraphEnabled |
+| `SettingsRepository.kt` | +1 pref key + update method |
+| `LearnedWord.kt` | +1 valeur NEOLOGISM dans WordSource |
+| `KeyboardModule.kt` | +2 providers DI (FastTextEngine, NeologismGenerator) |
+| `UrikInputMethodService.kt` | triggerSemanticGraph avec vrai FastText + PCA |
+| `SwipeKeyboardView.kt` | +setSemanticGraphNodes, +setOnNeologismRequestedListener |
+
+---
 
 ## Success Criteria *(mandatory)*
 

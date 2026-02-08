@@ -2,6 +2,9 @@ package com.urik.keyboard.di
 
 import android.content.Context
 import com.urik.keyboard.data.KeyboardRepository
+import com.urik.keyboard.ml.FastTextEngine
+import com.urik.keyboard.ml.NeologismGenerator
+import com.urik.keyboard.ml.PcaProjector
 import com.urik.keyboard.data.WordFrequencyRepository
 import com.urik.keyboard.data.database.KeyboardDatabase
 import com.urik.keyboard.data.database.LearnedWordDao
@@ -172,4 +175,14 @@ object KeyboardModule {
         learnedWordDao: LearnedWordDao,
         cacheMemoryManager: CacheMemoryManager,
     ): DictionaryBackupManager = DictionaryBackupManager(context, database, learnedWordDao, cacheMemoryManager)
+
+    @Provides
+    @Singleton
+    fun provideFastTextEngine(
+        @ApplicationContext context: Context,
+    ): FastTextEngine = FastTextEngine(context)
+
+    @Provides
+    @Singleton
+    fun provideNeologismGenerator(): NeologismGenerator = NeologismGenerator()
 }

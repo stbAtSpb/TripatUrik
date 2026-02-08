@@ -1,6 +1,9 @@
 package com.urik.keyboard.ui.keyboard.components
 
+import android.animation.AnimatorSet
+import android.animation.ValueAnimator
 import android.content.Context
+import android.util.Log
 import android.graphics.PointF
 import android.graphics.Rect
 import android.text.Editable
@@ -12,6 +15,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.animation.DecelerateInterpolator
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -31,6 +35,7 @@ import com.urik.keyboard.service.LanguageManager
 import com.urik.keyboard.service.SpellCheckManager
 import com.urik.keyboard.service.WordLearningEngine
 import com.urik.keyboard.theme.ThemeManager
+import com.urik.keyboard.ui.concentric.SemanticGraphOverlay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -83,6 +88,16 @@ class SwipeKeyboardView
         private var wordLearningEngine: WordLearningEngine? = null
 
         private val swipeOverlay = SwipeOverlayView(context)
+        private val semanticGraphOverlay = SemanticGraphOverlay(context)
+        private var isSemanticGraphVisible = false
+        private var crossFadeAnimator: AnimatorSet? = null
+        private var onSemanticWordSelected: ((String) -> Unit)? = null
+        private val autoDismissRunnable = Runnable {
+            if (isSemanticGraphVisible && !isDestroyed) {
+                Log.d(TAG_SEM, "autoDismiss: ${AUTO_DISMISS_DELAY_MS}ms elapsed, hiding graph")
+                hideSemanticGraph()
+            }
+        }
 
         private var suggestionBar: LinearLayout? = null
 
@@ -264,6 +279,42 @@ class SwipeKeyboardView
                     LayoutParams.MATCH_PARENT,
                 ),
             )
+            semanticGraphOverlay.visibility = GONE
+            semanticGraphOverlay.alpha = 0f
+            addView(
+                semanticGraphOverlay,
+                LayoutParams(
+                    LayoutParams.MATCH_PARENT,
+                    LayoutParams.MATCH_PARENT,
+                ),
+            )
+            semanticGraphOverlay.onWordSelected = { word ->
+                onSemanticWordSelected?.invoke(word)
+            }
+            semanticGraphOverlay.onDismissed = {
+                hideSemanticGraph()
+            }
+            semanticGraphOverlay.onTouchInteraction = {
+                if (isSemanticGraphVisible) {
+                    removeCallbacks(autoDismissRunnable)
+                    postDelayed(autoDismissRunnable, AUTO_DISMISS_DELAY_MS)
+                    Log.d(TAG_SEM, "autoDismiss: timer reset on touch")
+                }
+            }
+            semanticGraphOverlay.onMultiTouchStateChanged = { isActive ->
+                if (isActive) {
+                    // Pause auto-dismiss during multi-touch rotation
+                    removeCallbacks(autoDismissRunnable)
+                    Log.d(TAG_SEM, "autoDismiss: PAUSED (multi-touch active)")
+                } else {
+                    // Resume auto-dismiss after multi-touch ends
+                    if (isSemanticGraphVisible) {
+                        removeCallbacks(autoDismissRunnable)
+                        postDelayed(autoDismissRunnable, AUTO_DISMISS_DELAY_MS)
+                        Log.d(TAG_SEM, "autoDismiss: RESUMED (multi-touch ended)")
+                    }
+                }
+            }
         }
 
         override fun onAttachedToWindow() {
@@ -1314,6 +1365,7 @@ class SwipeKeyboardView
             for (i in 0 until childCount) {
                 val child = getChildAt(i)
                 if (child != swipeOverlay &&
+                    child != semanticGraphOverlay &&
                     child != suggestionBar &&
                     child != emojiPickerContainer &&
                     child != emojiSearchContainer &&
@@ -1686,6 +1738,8 @@ class SwipeKeyboardView
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             if (isDestroyed) return false
 
+            if (isSemanticGraphVisible) return false
+
             if (isTouchInEmojiPicker(ev.x, ev.y)) {
                 return false
             }
@@ -2011,6 +2065,128 @@ class SwipeKeyboardView
             dividerViewPool.clear()
         }
 
+        fun showSemanticGraph(anchorWord: String) {
+            if (isDestroyed || isSemanticGraphVisible) {
+                Log.d(TAG_SEM, "showSemanticGraph SKIP: destroyed=$isDestroyed visible=$isSemanticGraphVisible")
+                return
+            }
+
+            Log.d(TAG_SEM, "showSemanticGraph: anchor='$anchorWord' | crossFade ${SemanticGraphOverlay.CROSS_FADE_DURATION}ms")
+            isSemanticGraphVisible = true
+            crossFadeAnimator?.cancel()
+
+            semanticGraphOverlay.setLoading(anchorWord)
+            semanticGraphOverlay.visibility = VISIBLE
+
+            val keyboardView = findKeyboardView()
+
+            val fadeOutKeyboard = ValueAnimator.ofFloat(1f, 0f).apply {
+                duration = SemanticGraphOverlay.CROSS_FADE_DURATION
+                interpolator = DecelerateInterpolator()
+                addUpdateListener { animator ->
+                    keyboardView?.alpha = animator.animatedValue as Float
+                }
+            }
+
+            val fadeInGraph = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = SemanticGraphOverlay.CROSS_FADE_DURATION
+                interpolator = DecelerateInterpolator()
+                addUpdateListener { animator ->
+                    semanticGraphOverlay.alpha = animator.animatedValue as Float
+                }
+            }
+
+            crossFadeAnimator = AnimatorSet().apply {
+                playTogether(fadeOutKeyboard, fadeInGraph)
+                start()
+            }
+
+            removeCallbacks(autoDismissRunnable)
+            postDelayed(autoDismissRunnable, AUTO_DISMISS_DELAY_MS)
+            Log.d(TAG_SEM, "autoDismiss: timer started (${AUTO_DISMISS_DELAY_MS}ms)")
+        }
+
+        fun hideSemanticGraph() {
+            if (isDestroyed || !isSemanticGraphVisible) {
+                Log.d(TAG_SEM, "hideSemanticGraph SKIP: destroyed=$isDestroyed visible=$isSemanticGraphVisible")
+                return
+            }
+
+            removeCallbacks(autoDismissRunnable)
+            Log.d(TAG_SEM, "hideSemanticGraph: crossFade ${SemanticGraphOverlay.CROSS_FADE_DURATION}ms")
+            isSemanticGraphVisible = false
+            crossFadeAnimator?.cancel()
+
+            val keyboardView = findKeyboardView()
+
+            val fadeInKeyboard = ValueAnimator.ofFloat(keyboardView?.alpha ?: 0f, 1f).apply {
+                duration = SemanticGraphOverlay.CROSS_FADE_DURATION
+                interpolator = DecelerateInterpolator()
+                addUpdateListener { animator ->
+                    keyboardView?.alpha = animator.animatedValue as Float
+                }
+            }
+
+            val fadeOutGraph = ValueAnimator.ofFloat(semanticGraphOverlay.alpha, 0f).apply {
+                duration = SemanticGraphOverlay.CROSS_FADE_DURATION
+                interpolator = DecelerateInterpolator()
+                addUpdateListener { animator ->
+                    semanticGraphOverlay.alpha = animator.animatedValue as Float
+                }
+                addListener(object : android.animation.Animator.AnimatorListener {
+                    override fun onAnimationStart(animation: android.animation.Animator) {}
+                    override fun onAnimationRepeat(animation: android.animation.Animator) {}
+                    override fun onAnimationCancel(animation: android.animation.Animator) {}
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        semanticGraphOverlay.visibility = GONE
+                    }
+                })
+            }
+
+            crossFadeAnimator = AnimatorSet().apply {
+                playTogether(fadeInKeyboard, fadeOutGraph)
+                start()
+            }
+        }
+
+        fun isSemanticGraphShowing(): Boolean = isSemanticGraphVisible
+
+        fun setSemanticGraphNodes(anchor: String, nodes: List<SemanticGraphOverlay.GraphNode>) {
+            if (!isDestroyed) {
+                semanticGraphOverlay.setNodes(anchor, nodes)
+            }
+        }
+
+        fun setSemanticGraphLanguageColors(frenchColor: Int, englishColor: Int) {
+            if (!isDestroyed) {
+                semanticGraphOverlay.setLanguageColors(frenchColor, englishColor)
+            }
+        }
+
+        fun setOnNeologismRequestedListener(listener: (SemanticGraphOverlay.GraphNode, SemanticGraphOverlay.GraphNode) -> Unit) {
+            if (!isDestroyed) {
+                semanticGraphOverlay.onNeologismRequested = listener
+            }
+        }
+
+        fun setOnRotationCompletedListener(listener: (Float) -> Unit) {
+            if (!isDestroyed) {
+                semanticGraphOverlay.onRotationCompleted = listener
+            }
+        }
+
+        fun setSemanticGraphContextWords(words: List<String>) {
+            if (!isDestroyed) {
+                semanticGraphOverlay.setContextWords(words)
+            }
+        }
+
+        fun setOnSemanticWordSelectedListener(listener: (String) -> Unit) {
+            if (!isDestroyed) {
+                this.onSemanticWordSelected = listener
+            }
+        }
+
         /**
          * Cleans up all resources and cancels coroutines.
          *
@@ -2058,6 +2234,13 @@ class SwipeKeyboardView
             emojiPickerContainer = null
 
             swipeOverlay.visibility = GONE
+
+            removeCallbacks(autoDismissRunnable)
+            crossFadeAnimator?.cancel()
+            crossFadeAnimator = null
+            semanticGraphOverlay.cleanup()
+            isSemanticGraphVisible = false
+            onSemanticWordSelected = null
 
             onKeyClickListener = null
             onSwipeWordListener = null
@@ -2123,5 +2306,7 @@ class SwipeKeyboardView
 
         companion object {
             private const val SEARCH_DEBOUNCE_MS = 300L
+            private const val TAG_SEM = "SemGraph.Keyboard"
+            private const val AUTO_DISMISS_DELAY_MS = 5000L
         }
     }
