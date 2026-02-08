@@ -273,6 +273,75 @@ L'implementation suit une approche en 4 phases incrementales. Chaque phase DOIT 
 - Le modele tient en memoire avec FastText (budget total < 500MB RAM)
 - Pas de degradation du rendu des anneaux 1-3
 
+## Architecture UX : Deux Modes avec Transparence Progressive
+
+### Constat fondamental (issu des tests Phase 2b)
+
+Placer des lettres sur des cercles concentriques a des positions angulaires arbitraires ne permet pas a l'utilisateur de localiser efficacement la prochaine lettre. La projection ACP (eigenvalues/eigenvectors) n'a de sens que pour des unites semantiques (mots, concepts), pas pour des lettres individuelles.
+
+**Separation des responsabilites** :
+- **Saisie mecanique** (lettre par lettre) → le clavier AZERTY existant, optimise pour la localisation spatiale des lettres
+- **Exploration semantique** (mots, concepts, associations) → projection ACP 2D libre, sans contrainte de cercles
+
+### Mode 1 : Clavier de saisie (mode par defaut)
+
+Le clavier AZERTY/SwipeKeyboard classique d'Urik, avec sa barre de suggestions existante (dictionnaire, auto-completion). C'est le mode actif au demarrage et pour toute saisie lettre par lettre.
+
+### Mode 2 : Graphe semantique (exploration)
+
+Un graphe 2D de mots/concepts projetes par ACP sur les 2 axes principaux (eigenvectors tries par eigenvalue decroissante). Les mots sont places librement dans l'espace 2D selon leurs coordonnees dans l'espace semantique projete - PAS sur des cercles fixes.
+
+**Proprietes du graphe semantique** :
+- La distance entre deux mots reflète leur proximite semantique
+- Les axes portent le maximum de variance (information correlee)
+- Multi-pinch rotation : pivoter a 2 doigts pour reveler d'autres dimensions semantiques
+- Les mots proches du centre ont la plus forte correlation avec le contexte actuel
+
+### Transition : Transparence progressive (cross-fade)
+
+La transition entre les deux modes se fait par un cross-fade progressif (~400ms) :
+
+```
+Mode Clavier (opacite 100%)
+     │
+     │ declencheur: long-press sur suggestion / geste dedie
+     │
+     ▼ cross-fade 400ms
+     │  - clavier: opacite 100% → 0%
+     │  - graphe:  opacite 0% → 100%
+     │
+Mode Graphe Semantique (opacite 100%)
+     │
+     │ retour: tap sur mot (insere + retour) / swipe down
+     │
+     ▼ cross-fade 400ms inverse
+     │
+Mode Clavier (opacite 100%)
+```
+
+**Declencheurs vers le graphe** :
+- Long-press sur un mot de la barre de suggestions
+- Geste dedie (a definir : double-tap zone specifique, ou bouton)
+
+**Retour au clavier** :
+- Tap sur un mot du graphe → le mot est insere dans le champ de saisie, retour au clavier
+- Swipe vers le bas → annulation, retour au clavier sans insertion
+
+### Extensibilite AR/XR (future-proofing)
+
+L'architecture est concue pour etre extensible de 2D a 3D :
+
+- **2D actuel** : projection sur les 2 premiers eigenvectors (ecran tactile classique)
+- **3D futur** : projection sur les 3 premiers eigenvectors (Android XR SDK / ARCore)
+- Le multi-pinch devient un multi-pinch 3D (rotation dans l'espace 3D)
+- Les mots deviennent des spheres positionnees dans l'espace 3D
+- Le passage de 2 a 3 eigenvectors est un changement de parametre, pas d'architecture
+
+**SDK cibles** :
+- Android XR SDK (Galaxy XR, Project Moohan)
+- ARCore (smartphones compatibles)
+- La structure ComputeEngine produit deja des vecteurs N-dimensionnels, la projection 2D→3D est une operation terminale
+
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes

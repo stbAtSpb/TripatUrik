@@ -1,5 +1,6 @@
 package com.urik.keyboard.ui.concentric
 
+import android.util.Log
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -14,6 +15,10 @@ import java.util.concurrent.atomic.AtomicReference
  * Step 2c will add FastText k-NN lookup.
  */
 class ComputeEngine {
+
+    companion object {
+        private const val TAG = "ConcentricCompute"
+    }
 
     /**
      * Result of a compute cycle: lists of suggested items per ring.
@@ -45,9 +50,7 @@ class ComputeEngine {
     @Volatile
     private var lastComputedGeneration = -1L
 
-    // --- Mock data for Step 2a ---
-    private val frenchLetters = "eaistnrulodcmpgbvhfqjxzykw".toList().map { it.toString() }
-
+    // --- Mock data (rings 1-2, will be replaced by FastText in Step 2c) ---
     private val mockWords = mapOf(
         "" to listOf("le", "la", "de", "un", "et", "je", "il", "ce", "ne", "pas"),
         "b" to listOf("bon", "bien", "beau", "blanc", "bleu", "bras", "but", "bas"),
@@ -83,6 +86,7 @@ class ComputeEngine {
     fun updateInput(input: String) {
         currentInput = input.lowercase()
         inputGeneration++
+        Log.d(TAG, "INPUT_CHANGED: \"$currentInput\" (gen=$inputGeneration)")
     }
 
     /**
@@ -137,25 +141,25 @@ class ComputeEngine {
     }
 
     /**
-     * Mock computation: simulates k-NN lookup with realistic delays.
-     * Step 2b/2c will replace this with real frequency model / FastText.
+     * Compute suggestions for all rings.
+     * Ring 0: real French bigram model (Step 2b).
+     * Ring 1: mock word completions (Step 2c will replace with FastText).
+     * Ring 2: mock contextual words (Step 2c will replace with FastText).
      */
     private fun computeMock(input: String, generation: Long): ComputeResult {
-        // Simulate compute latency (2-5ms for mock)
-        try {
-            Thread.sleep(3)
-        } catch (_: InterruptedException) {
-            return ComputeResult(generation = generation)
-        }
+        // Ring 0: REAL bigram frequency model
+        val ring0 = computeBigramLetters(input)
 
-        // Ring 0: next probable letters (mock: shuffle based on input)
-        val ring0 = computeMockLetters(input)
-
-        // Ring 1: word completions (mock: lookup in mock dictionary)
+        // Ring 1: word completions (still mock - FastText in Step 2c)
         val ring1 = computeMockWords(input)
 
-        // Ring 2: contextual words (mock: random subset)
+        // Ring 2: contextual words (still mock - FastText in Step 2c)
         val ring2 = computeMockContext(input)
+
+        Log.d(TAG, "COMPUTE gen=$generation input=\"$input\"")
+        Log.d(TAG, "  RING0 letters: ${ring0.map { "${it.label}(${String.format("%.2f", it.score)})" }}")
+        Log.d(TAG, "  RING1 words:   ${ring1.map { it.label }}")
+        Log.d(TAG, "  RING2 context: ${ring2.map { it.label }}")
 
         return ComputeResult(
             ring0Letters = ring0,
@@ -165,14 +169,16 @@ class ComputeEngine {
         )
     }
 
-    private fun computeMockLetters(input: String): List<ScoredItem> {
-        // Simple frequency-based ordering: most common French letters first
-        // Shift based on last character for visual feedback
-        val shift = if (input.isNotEmpty()) input.last().code % frenchLetters.size else 0
-        val shifted = frenchLetters.drop(shift) + frenchLetters.take(shift)
-        return shifted.take(8).mapIndexed { i, letter ->
-            ScoredItem(letter, 1f - i * 0.1f)
-        }
+    /**
+     * Real French bigram model: returns the most probable next letters
+     * based on the last character typed.
+     */
+    private fun computeBigramLetters(input: String): List<ScoredItem> {
+        val lastChar = if (input.isNotEmpty()) input.last().lowercaseChar() else null
+        Log.d(TAG, "  BIGRAM lookup: lastChar='$lastChar' from input=\"$input\"")
+        val bigramResult = FrenchBigramModel.getNextLetters(lastChar, maxResults = 8)
+        Log.d(TAG, "  BIGRAM result: ${bigramResult.map { "${it.letter}(${String.format("%.2f", it.score)})" }}")
+        return bigramResult.map { ScoredItem(it.letter, it.score) }
     }
 
     private fun computeMockWords(input: String): List<ScoredItem> {

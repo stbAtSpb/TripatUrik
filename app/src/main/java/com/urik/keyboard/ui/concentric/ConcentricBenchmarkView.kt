@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.util.AttributeSet
+import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import java.util.concurrent.CopyOnWriteArrayList
@@ -29,6 +30,10 @@ class ConcentricBenchmarkView
         defStyleAttr: Int = 0,
     ) : SurfaceView(context, attrs, defStyleAttr),
         SurfaceHolder.Callback {
+
+    companion object {
+        private const val TAG = "ConcentricView"
+    }
 
     // --- Configuration ---
     private val ringRadiusFactors = floatArrayOf(0.15f, 0.38f, 0.62f)
@@ -190,6 +195,7 @@ class ConcentricBenchmarkView
      */
     fun onCharacterInput(char: Char) {
         currentInputText += char
+        Log.d(TAG, "CHAR_INPUT: '$char' -> currentInput=\"$currentInputText\"")
         computeEngine.updateInput(currentInputText)
     }
 
@@ -199,6 +205,7 @@ class ConcentricBenchmarkView
     fun onBackspace() {
         if (currentInputText.isNotEmpty()) {
             currentInputText = currentInputText.dropLast(1)
+            Log.d(TAG, "BACKSPACE -> currentInput=\"$currentInputText\"")
             computeEngine.updateInput(currentInputText)
         }
     }
@@ -208,6 +215,7 @@ class ConcentricBenchmarkView
      */
     fun onClearInput() {
         currentInputText = ""
+        Log.d(TAG, "CLEAR -> currentInput=\"\"")
         computeEngine.updateInput("")
     }
 
@@ -276,6 +284,11 @@ class ConcentricBenchmarkView
         if (result.generation == lastAppliedGeneration) return
         lastAppliedGeneration = result.generation
         lastComputeTimeMs = result.computeTimeMs
+
+        Log.d(TAG, "APPLY gen=${result.generation} ring0=${result.ring0Letters.size} ring1=${result.ring1Words.size} ring2=${result.ring2Context.size}")
+        Log.d(TAG, "  DISPLAY_RING0: ${result.ring0Letters.map { it.label }}")
+        Log.d(TAG, "  DISPLAY_RING1: ${result.ring1Words.map { it.label }}")
+        Log.d(TAG, "  DISPLAY_RING2: ${result.ring2Context.map { it.label }}")
 
         // Rebuild input bubbles from compute result
         inputBubbles.clear()
