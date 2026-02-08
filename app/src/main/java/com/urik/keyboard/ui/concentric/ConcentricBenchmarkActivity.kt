@@ -1,41 +1,27 @@
 package com.urik.keyboard.ui.concentric
 
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.Gravity
 import android.view.MenuItem
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.urik.keyboard.R
 
 /**
- * Standalone Activity for Phase 0+1 performance benchmarking.
- * Hosts a ConcentricBenchmarkView (SurfaceView) with control buttons
- * for dynamic bubble management and stress testing.
+ * Phase 2a benchmark Activity.
+ * Hosts ConcentricBenchmarkView with a mini letter keyboard at the bottom
+ * for testing the async compute pipeline interactively.
+ *
+ * Type letters -> compute engine produces suggestions asynchronously ->
+ * render thread picks them up via double-buffer -> bubbles update with animation.
  */
 class ConcentricBenchmarkActivity : AppCompatActivity() {
 
     private var benchmarkView: ConcentricBenchmarkView? = null
-    private val handler = Handler(Looper.getMainLooper())
-    private var stressTestRunning = false
-    private var stressAddedIds = mutableListOf<Int>()
-
-    // Words pool for stress test
-    private val stressWords = listOf(
-        "chat", "soleil", "lune", "mer", "vent", "feu", "eau", "terre",
-        "amour", "paix", "joie", "vie", "nuit", "jour", "ciel", "temps",
-        "rire", "chant", "doux", "fort", "bleu", "vert", "rose", "noir",
-        "pain", "vin", "cafe", "fleur", "arbre", "pont", "rue", "lac",
-        "ile", "roi", "reve", "jeu", "mot", "voix", "main", "pied",
-        "coeur", "esprit", "monde", "route", "ville", "maison", "ecole", "livre",
-    )
-    private var stressWordIndex = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,10 +42,10 @@ class ConcentricBenchmarkActivity : AppCompatActivity() {
 
         // Info bar
         val infoBar = TextView(this).apply {
-            text = getString(R.string.concentric_benchmark_info_phase1)
+            text = getString(R.string.concentric_benchmark_info_phase2a)
             setTextColor(0xFFffc4a3.toInt())
-            textSize = 12f
-            setPadding(24, 12, 24, 12)
+            textSize = 11f
+            setPadding(24, 8, 24, 8)
             setBackgroundColor(0xFF1a3d4f.toInt())
         }
         root.addView(infoBar, LinearLayout.LayoutParams(
@@ -76,9 +62,9 @@ class ConcentricBenchmarkActivity : AppCompatActivity() {
             1f,
         ))
 
-        // Control buttons bar
-        val buttonBar = createButtonBar()
-        root.addView(buttonBar, LinearLayout.LayoutParams(
+        // Mini keyboard for testing
+        val miniKeyboard = createMiniKeyboard()
+        root.addView(miniKeyboard, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT,
         ))
@@ -86,110 +72,99 @@ class ConcentricBenchmarkActivity : AppCompatActivity() {
         setContentView(root)
     }
 
-    private fun createButtonBar(): LinearLayout {
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(8, 8, 8, 16)
+    private fun createMiniKeyboard(): LinearLayout {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(4, 4, 4, 8)
             setBackgroundColor(0xFF1a3d4f.toInt())
         }
 
-        val buttonParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            setMargins(4, 0, 4, 0)
+        // Letter rows (AZERTY layout for French)
+        val rows = listOf(
+            "azertyuiop",
+            "qsdfghjklm",
+            "wxcvbn",
+        )
+
+        for (row in rows) {
+            val rowLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+
+            for (char in row) {
+                val btn = Button(this).apply {
+                    text = char.uppercase()
+                    textSize = 14f
+                    setPadding(0, 0, 0, 0)
+                    minWidth = 0
+                    minimumWidth = 0
+                    minHeight = 0
+                    minimumHeight = 0
+                    setOnClickListener {
+                        benchmarkView?.onCharacterInput(char)
+                    }
+                }
+                val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    setMargins(1, 1, 1, 1)
+                }
+                rowLayout.addView(btn, params)
+            }
+
+            container.addView(rowLayout, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ))
         }
 
-        // Add bubble button
-        bar.addView(
+        // Action row: BACKSPACE, SPACE, CLEAR
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+
+        val actionParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            setMargins(2, 2, 2, 2)
+        }
+
+        actionRow.addView(
             Button(this).apply {
-                text = "+1"
+                text = "DEL"
                 textSize = 12f
-                setOnClickListener { addRandomBubble() }
+                setOnClickListener { benchmarkView?.onBackspace() }
             },
-            buttonParams,
+            actionParams,
         )
 
-        // Add 5 bubbles
-        bar.addView(
+        actionRow.addView(
             Button(this).apply {
-                text = "+5"
+                text = "SPACE"
                 textSize = 12f
-                setOnClickListener { repeat(5) { addRandomBubble() } }
+                setOnClickListener { benchmarkView?.onCharacterInput(' ') }
             },
-            buttonParams,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f).apply {
+                setMargins(2, 2, 2, 2)
+            },
         )
 
-        // Stress test button
-        bar.addView(
+        actionRow.addView(
             Button(this).apply {
-                text = "STRESS"
-                textSize = 12f
-                setOnClickListener { toggleStressTest(this) }
-            },
-            buttonParams,
-        )
-
-        // Reset button
-        bar.addView(
-            Button(this).apply {
-                text = "RESET"
+                text = "CLEAR"
                 textSize = 12f
                 setOnClickListener {
-                    stressTestRunning = false
-                    stressAddedIds.clear()
-                    benchmarkView?.resetToInitial()
+                    benchmarkView?.onClearInput()
                     benchmarkView?.resetMetrics()
-                    Toast.makeText(context, "Reset to 30 bubbles", Toast.LENGTH_SHORT).show()
                 }
             },
-            buttonParams,
+            actionParams,
         )
 
-        return bar
-    }
+        container.addView(actionRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ))
 
-    private fun addRandomBubble() {
-        val ring = (0..2).random()
-        val word = stressWords[stressWordIndex % stressWords.size]
-        stressWordIndex++
-        val id = benchmarkView?.addBubble(ring, word, priority = 0.5f) ?: return
-        stressAddedIds.add(id)
-    }
-
-    private fun toggleStressTest(button: Button) {
-        if (stressTestRunning) {
-            stressTestRunning = false
-            button.text = "STRESS"
-            return
-        }
-
-        stressTestRunning = true
-        button.text = "STOP"
-        benchmarkView?.resetMetrics()
-
-        // Add 10 bubbles/sec for 5 seconds = 50 bubbles total
-        var added = 0
-        val maxToAdd = 50
-        val intervalMs = 100L // 1 bubble every 100ms = 10/sec
-
-        val runnable = object : Runnable {
-            override fun run() {
-                if (!stressTestRunning || added >= maxToAdd) {
-                    stressTestRunning = false
-                    button.text = "STRESS"
-                    val total = benchmarkView?.getBubbleCount() ?: 0
-                    Toast.makeText(
-                        this@ConcentricBenchmarkActivity,
-                        "Stress done: $total bubbles, overlaps: ${benchmarkView?.lastOverlapCount}",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return
-                }
-                addRandomBubble()
-                added++
-                handler.postDelayed(this, intervalMs)
-            }
-        }
-        handler.post(runnable)
+        return container
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean =
@@ -202,8 +177,6 @@ class ConcentricBenchmarkActivity : AppCompatActivity() {
         }
 
     override fun onDestroy() {
-        stressTestRunning = false
-        handler.removeCallbacksAndMessages(null)
         benchmarkView = null
         super.onDestroy()
     }
