@@ -60,17 +60,6 @@ class SwipeDetector
         )
 
         /**
-         * Complete swipe path with context.
-         */
-        data class SwipePath(
-            val points: List<SwipePoint>,
-            val keysTraversed: List<KeyboardKey.Character>,
-            val scriptCode: Int,
-            val isRtl: Boolean = false,
-            val topCandidates: List<WordCandidate>,
-        )
-
-        /**
          * Callback interface for swipe events.
          */
         interface SwipeListener {
@@ -136,6 +125,9 @@ class SwipeDetector
 
         @Volatile
         private var cachedAdaptiveSigmas = emptyMap<Char, PathGeometryAnalyzer.AdaptiveSigma>()
+
+        @Volatile
+        private var cachedKeyNeighborhoods = emptyMap<Char, PathGeometryAnalyzer.KeyNeighborhood>()
 
         @Volatile
         private var lastKeyPositionsHash = 0
@@ -452,10 +444,14 @@ class SwipeDetector
                 }
 
                 if (swipePoints.size >= 3) {
-                    val largeGapCount =
-                        swipePoints.zipWithNext().count { (prev, curr) ->
-                            calculateDistance(prev.x, prev.y, curr.x, curr.y) > SwipeDetectionConstants.MAX_CONSECUTIVE_GAP_PX
+                    var largeGapCount = 0
+                    for (i in 0 until swipePoints.size - 1) {
+                        val prev = swipePoints[i]
+                        val curr = swipePoints[i + 1]
+                        if (calculateDistance(prev.x, prev.y, curr.x, curr.y) > SwipeDetectionConstants.MAX_CONSECUTIVE_GAP_PX) {
+                            largeGapCount++
                         }
+                    }
 
                     val gapRatio = largeGapCount.toFloat() / (swipePoints.size - 1)
                     if (gapRatio > 0.5f) {
@@ -484,12 +480,51 @@ class SwipeDetector
                         return
                     }
 
+                    if (isPeckLikeMotion()) {
+                        return
+                    }
+
                     isSwiping = true
                     pointCounter = swipePoints.size
-                    _swipeListener?.onSwipeStart(PointF(start.x, start.y))
+                    cachedTransformPoint.set(start.x, start.y)
+                    _swipeListener?.onSwipeStart(cachedTransformPoint)
                     updateSwipePath(event)
                 }
             }
+        }
+
+        /**
+         * Discriminates peck taps from intentional swipes
+         */
+        private fun isPeckLikeMotion(): Boolean {
+            val pointCount = swipePoints.size
+            if (pointCount < 3) return false
+
+            val first = swipePoints[0]
+            val last = swipePoints[pointCount - 1]
+            val totalDuration = last.timestamp - first.timestamp
+            if (totalDuration <= 0) return false
+
+            val midTimestamp = first.timestamp + totalDuration / 2
+            var midPointIndex = 0
+            var minTimeDiff = Long.MAX_VALUE
+            for (i in 1 until pointCount - 1) {
+                val diff = kotlin.math.abs(swipePoints[i].timestamp - midTimestamp)
+                if (diff < minTimeDiff) {
+                    minTimeDiff = diff
+                    midPointIndex = i
+                }
+            }
+
+            if (midPointIndex == 0) return false
+
+            val midPoint = swipePoints[midPointIndex]
+            val earlyDisplacement = calculateDistance(first.x, first.y, midPoint.x, midPoint.y)
+            val lateDisplacement = calculateDistance(midPoint.x, midPoint.y, last.x, last.y)
+            val totalDisplacement = earlyDisplacement + lateDisplacement
+            if (totalDisplacement <= 0f) return false
+
+            return lateDisplacement / totalDisplacement > SwipeDetectionConstants.PECK_LATE_DISPLACEMENT_RATIO
         }
 
         private fun shouldSamplePoint(
@@ -587,15 +622,6 @@ class SwipeDetector
             val now = System.currentTimeMillis()
             if (now - lastUpdateTime >= SwipeDetectionConstants.UI_UPDATE_INTERVAL_MS) {
                 lastUpdateTime = now
-
-                SwipePath(
-                    points = swipePoints.toList(),
-                    keysTraversed = emptyList(),
-                    scriptCode = currentScriptCode,
-                    isRtl = currentIsRTL,
-                    topCandidates = emptyList(),
-                )
-
                 _swipeListener?.onSwipeUpdate(transformed)
             }
         }
@@ -617,16 +643,6 @@ class SwipeDetector
                 swipePoints.add(finalPoint)
 
                 val pathSnapshot = ArrayList(swipePoints)
-                val scriptSnapshot = currentScriptCode
-                val rtlSnapshot = currentIsRTL
-
-                SwipePath(
-                    points = pathSnapshot,
-                    keysTraversed = emptyList(),
-                    scriptCode = scriptSnapshot,
-                    isRtl = rtlSnapshot,
-                    topCandidates = emptyList(),
-                )
 
                 _swipeListener?.onSwipeEnd()
 
@@ -663,7 +679,7 @@ class SwipeDetector
         }
 
         private suspend fun performSpatialScoringAsync(swipePath: List<SwipePoint>): List<WordCandidate> =
-            withContext(Dispatchers.IO) {
+            withContext(Dispatchers.Default) {
                 try {
                     if (swipePath.isEmpty()) return@withContext emptyList()
 
@@ -1069,6 +1085,7 @@ class SwipeDetector
                     newSigmas[char] = pathGeometryAnalyzer.calculateAdaptiveSigma(char, keyPositions)
                 }
                 cachedAdaptiveSigmas = newSigmas
+                cachedKeyNeighborhoods = pathGeometryAnalyzer.computeKeyNeighborhoods(keyPositions)
                 lastKeyPositionsHash = positionsHash
             }
         }
@@ -1288,6 +1305,7 @@ class SwipeDetector
 
             var totalScore = 0f
             val sigmaCache = cachedAdaptiveSigmas
+            val neighborhoodCache = cachedKeyNeighborhoods
 
             for (letterIndex in word.indices) {
                 val char = word[letterIndex]
@@ -1298,15 +1316,12 @@ class SwipeDetector
                 val isLastLetter = letterIndex == word.length - 1
 
                 val adaptiveSigma = sigmaCache[lowerChar]?.sigma ?: GeometricScoringConstants.DEFAULT_SIGMA
-                val effectiveSigma =
+                val baseSigma =
                     if (isClusteredWord) {
                         adaptiveSigma * GeometricScoringConstants.CLUSTERED_SEQUENCE_TOLERANCE_MULTIPLIER
                     } else {
                         adaptiveSigma
                     }
-
-                val twoSigmaSquared = 2f * effectiveSigma * effectiveSigma
-                val expThreshold = (2.5f * effectiveSigma) * (2.5f * effectiveSigma)
 
                 val searchRange =
                     when {
@@ -1319,6 +1334,8 @@ class SwipeDetector
                 var minDistanceSquared = Float.MAX_VALUE
                 var closestPointIndex = -1
                 var velocityAtClosest = 0f
+                var closestPointX = 0f
+                var closestPointY = 0f
 
                 val searchStart = if (isLastLetter) swipePath.size - searchRange else 0
                 val searchEnd = if (isFirstLetter) searchRange else swipePath.size
@@ -1350,6 +1367,8 @@ class SwipeDetector
                         minDistanceSquared = spatialDistanceSquared
                         closestPointIndex = pointIndex
                         velocityAtClosest = point.velocity
+                        closestPointX = point.x
+                        closestPointY = point.y
 
                         if (spatialDistanceSquared < 100f && positionDeviation < 2f) {
                             break
@@ -1357,12 +1376,38 @@ class SwipeDetector
                     }
                 }
 
+                val anchorModifier =
+                    pathGeometryAnalyzer.calculateAnchorSigmaModifier(
+                        letterIndex,
+                        word.length,
+                        closestPointIndex,
+                        geometricAnalysis,
+                    )
+                val effectiveSigma = baseSigma * anchorModifier
+                val twoSigmaSquared = 2f * effectiveSigma * effectiveSigma
+                val expThreshold = (2.5f * effectiveSigma) * (2.5f * effectiveSigma)
+
                 var letterScore =
                     if (minDistanceSquared > expThreshold) {
                         0.0f
                     } else {
                         exp(-minDistanceSquared / twoSigmaSquared)
                     }
+
+                if (letterScore < GeometricScoringConstants.NEIGHBORHOOD_RESCUE_THRESHOLD) {
+                    val neighborhood = neighborhoodCache[lowerChar]
+                    if (neighborhood != null) {
+                        val rescueScore =
+                            pathGeometryAnalyzer.calculateNeighborhoodRescueScore(
+                                closestPointX,
+                                closestPointY,
+                                neighborhood,
+                                keyPositions,
+                                effectiveSigma,
+                            )
+                        letterScore = maxOf(letterScore, rescueScore)
+                    }
+                }
 
                 val velocityWeight = pathGeometryAnalyzer.calculateVelocityWeight(velocityAtClosest)
                 letterScore *= velocityWeight
@@ -1394,6 +1439,8 @@ class SwipeDetector
                 totalScore += letterScore
             }
 
+            val lexicalCoherenceBonus = pathGeometryAnalyzer.calculateLexicalCoherenceBonus(letterScores)
+
             val sequencePenalty =
                 calculateSequencePenalty(
                     word,
@@ -1416,7 +1463,7 @@ class SwipeDetector
             val lengthBonus = calculateLengthBonus(word.length, ratioQuality)
 
             val spatialWithBonuses =
-                (baseSpatialScore * sequencePenalty * lengthBonus * wrongLetterPenalty * pathExhaustionPenalty)
+                (baseSpatialScore * sequencePenalty * lengthBonus * wrongLetterPenalty * pathExhaustionPenalty * lexicalCoherenceBonus)
                     .coerceAtMost(1.0f)
 
             val repetitionCount = word.length - uniqueLetterCount
@@ -1625,6 +1672,8 @@ class SwipeDetector
             scopeJob.cancel()
             _swipeListener = null
             keyCharacterPositions = emptyMap()
+            cachedAdaptiveSigmas = emptyMap()
+            cachedKeyNeighborhoods = emptyMap()
             reset()
         }
     }
