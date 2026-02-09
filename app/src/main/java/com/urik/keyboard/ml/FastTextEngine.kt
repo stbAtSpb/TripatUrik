@@ -252,7 +252,12 @@ class FastTextEngine @Inject constructor(
         }
         val vecPath = "vectors/fasttext_${tag}_${suffix}.uvec"
 
-        val store = loadUvecFile(vecPath)
+        val store = try {
+            loadUvecFile(vecPath)
+        } catch (e: java.io.FileNotFoundException) {
+            Log.w(TAG, "loadLanguageCategory($key): file not found ($vecPath), skipping")
+            return@withContext
+        }
 
         // Load alignment matrix once per language (shared between noun/verb)
         val alignMatrix = alignMatrices.getOrPut(tag) {
@@ -260,12 +265,35 @@ class FastTextEngine @Inject constructor(
             loadAlignMatrix(alignPath, store.dimension) ?: FloatArray(0)
         }.let { if (it.isEmpty()) null else it }
 
+        // Pre-align all vectors at load time so brute-force k-NN is a simple dot product
+        val finalVectors: FloatArray
+        if (alignMatrix != null) {
+            val dim = store.dimension
+            val n = store.words.size
+            finalVectors = FloatArray(n * dim)
+            val aligned = FloatArray(dim)
+            for (i in 0 until n) {
+                val offset = i * dim
+                for (d in 0 until dim) {
+                    var s = 0f
+                    for (c in 0 until dim) {
+                        s += alignMatrix[d * dim + c] * store.vectors[offset + c]
+                    }
+                    aligned[d] = s
+                }
+                System.arraycopy(aligned, 0, finalVectors, offset, dim)
+            }
+            Log.d(TAG, "loadLanguageCategory($key): pre-aligned ${n} vectors")
+        } else {
+            finalVectors = store.vectors
+        }
+
         val finalStore = VectorStore(
             words = store.words,
-            vectors = store.vectors,
+            vectors = finalVectors,
             dimension = store.dimension,
             wordIndex = store.wordIndex,
-            alignMatrix = alignMatrix,
+            alignMatrix = null, // vectors are pre-aligned, no runtime alignment needed
         )
 
         stores[key] = finalStore
@@ -311,20 +339,27 @@ class FastTextEngine @Inject constructor(
         category: WordCategory,
         k: Int,
     ): List<ScoredWord> {
-        val key1 = categoryKey(lang1, category)
-        val store1 = stores[key1] ?: return emptyList()
+        val store1 = stores[categoryKey(lang1, category)]
         val store2 = stores[categoryKey(lang2, category)]
 
-        val anchorAligned = getAlignedVector(anchor, lang1, category) ?: return emptyList()
-        val dim = store1.dimension
+        if (store1 == null && store2 == null) return emptyList()
 
+        // Try to find anchor vector in lang1 first, then lang2
+        val anchorAligned = getAlignedVector(anchor, lang1, category)
+            ?: getAlignedVector(anchor, lang2, category)
+            ?: return emptyList()
+
+        val dim = store1?.dimension ?: store2!!.dimension
         val results = mutableListOf<ScoredWord>()
 
-        val anchorIdx1 = store1.wordIndex[anchor.lowercase()] ?: -1
-        results.addAll(findTopKAligned(store1, anchorAligned, dim, k, lang1, excludeIndex = anchorIdx1))
+        if (store1 != null) {
+            val anchorIdx1 = store1.wordIndex[anchor.lowercase()] ?: -1
+            results.addAll(findTopKAligned(store1, anchorAligned, dim, k, lang1, excludeIndex = anchorIdx1))
+        }
 
         if (store2 != null) {
-            results.addAll(findTopKAligned(store2, anchorAligned, dim, k, lang2, excludeIndex = -1))
+            val anchorIdx2 = store2.wordIndex[anchor.lowercase()] ?: -1
+            results.addAll(findTopKAligned(store2, anchorAligned, dim, k, lang2, excludeIndex = anchorIdx2))
         }
 
         return results.sortedByDescending { it.similarity }.take(k)

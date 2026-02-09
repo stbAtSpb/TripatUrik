@@ -138,6 +138,166 @@ def write_uvec(path: str, words: list, vectors: np.ndarray, dimension: int):
     print(f"  Written {path}: {word_count} words, {dimension}D, {file_size / 1024 / 1024:.1f} MB")
 
 
+def load_uvec(path: str) -> tuple:
+    """Load a .uvec binary file, returning (words, vectors_f32, dimension)."""
+    with open(path, 'rb') as f:
+        magic = f.read(4)
+        if magic != b'UVEC':
+            raise ValueError(f"Invalid .uvec magic: {magic}")
+        dimension = struct.unpack('<H', f.read(2))[0]
+        word_count = struct.unpack('<I', f.read(4))[0]
+        f.read(6)  # reserved
+
+        words = []
+        for _ in range(word_count):
+            wlen = struct.unpack('<H', f.read(2))[0]
+            word = f.read(wlen).decode('utf-8')
+            words.append(word)
+
+        vec_bytes = f.read(word_count * dimension * 2)  # float16 = 2 bytes
+        vectors = np.frombuffer(vec_bytes, dtype=np.float16).reshape(word_count, dimension)
+        vectors = vectors.astype(np.float32)
+
+    print(f"  Loaded {path}: {word_count} words, {dimension}D")
+    return words, vectors, dimension
+
+
+# --- French verb morphology (no external dependency) ---
+
+# Common French verb infinitive endings
+_FR_INFINITIVE_SUFFIXES = ('er', 'ir', 're', 'oir')
+
+# Conjugated verb endings (indicatif, subjonctif, conditionnel, impératif)
+_FR_VERB_SUFFIXES = (
+    # Présent -er verbs
+    'ons', 'ez',
+    # Imparfait
+    'ais', 'ait', 'ions', 'iez', 'aient',
+    # Passé simple
+    'âmes', 'âtes', 'èrent', 'îmes', 'îtes', 'irent', 'ûmes', 'ûtes', 'urent',
+    # Futur
+    'erai', 'eras', 'erons', 'erez', 'eront',
+    'irai', 'iras', 'irons', 'irez', 'iront',
+    # Conditionnel
+    'erais', 'erait', 'erions', 'eriez', 'eraient',
+    'irais', 'irait', 'irions', 'iriez', 'iraient',
+    # Subjonctif
+    'asses', 'issions', 'issiez', 'issent',
+    # Participe présent
+    'ant',
+    # Participe passé (common patterns)
+    'issant',
+)
+
+# Endings that are strong verb markers (high precision)
+_FR_STRONG_VERB_ENDINGS = (
+    'iser', 'aser', 'oser', 'user',  # -iser, -aser, etc.
+    'ifier', 'uer', 'uer', 'ller', 'tter', 'pper',
+    'enir', 'ertir', 'ormir', 'ouvrir', 'offrir', 'cueillir',
+    'endre', 'ondre', 'erdre', 'ordre', 'aître', 'oître',
+    'evoir', 'ouvoir', 'avoir', 'ouloir', 'aloir',
+)
+
+# Words that look like verbs but aren't (false positives to exclude)
+_FR_VERB_EXCEPTIONS = {
+    'air', 'chair', 'cuir', 'désir', 'loisir', 'plaisir', 'soir', 'avoir',
+    'devoir', 'pouvoir', 'savoir', 'vouloir',  # these ARE verbs but also nouns
+    'fer', 'hiver', 'enfer', 'amer', 'cancer', 'danger', 'diner', 'premier',
+    'dernier', 'léger', 'étranger', 'particulier', 'régulier', 'entier',
+    'hier', 'fier', 'papier', 'métier', 'quartier', 'atelier', 'cahier',
+    'escalier', 'grenier', 'panier', 'soulier', 'tablier', 'sentier',
+    'palier', 'pilier', 'chantier', 'bijoutier', 'bouclier', 'calendrier',
+    'cendrier', 'chevalier', 'clavier', 'collier', 'courrier', 'encrier',
+    'fichier', 'foyer', 'gravier', 'laurier', 'levier', 'olivier',
+    'pommier', 'rosier', 'sanglier', 'sorcier', 'trésorier', 'vivier',
+}
+
+# English verb morphology
+_EN_VERB_SUFFIXES = (
+    'ing', 'ize', 'ise', 'ify', 'ate', 'ify',
+    'ened', 'ened',
+)
+
+_EN_STRONG_VERB_ENDINGS = (
+    'alize', 'ilize', 'imize', 'anize',
+    'icate', 'ulate', 'ivate', 'uate',
+    'ifying', 'izing', 'ising', 'ating',
+)
+
+
+def morpho_split_vocabulary(words: list, lang: str) -> tuple:
+    """
+    Split vocabulary into verbs and non-verbs using morphological heuristics.
+    No external dependency needed.
+    Returns (noun_indices, verb_indices).
+    noun_indices = everything that's NOT classified as a verb.
+    """
+    verb_indices = []
+    noun_indices = []
+
+    if lang == 'fr':
+        for i, word in enumerate(words):
+            w = word.lower()
+            if len(w) < 3:
+                noun_indices.append(i)
+                continue
+
+            if w in _FR_VERB_EXCEPTIONS:
+                noun_indices.append(i)  # known non-verb
+                continue
+
+            is_verb = False
+
+            # Strong verb endings (high confidence)
+            if any(w.endswith(s) for s in _FR_STRONG_VERB_ENDINGS):
+                is_verb = True
+            # Infinitive endings with length check
+            elif w.endswith('er') and len(w) >= 4 and w[-3] not in 'éèê':
+                is_verb = True
+            elif w.endswith('ir') and len(w) >= 4:
+                is_verb = True
+            elif w.endswith('re') and len(w) >= 5:
+                is_verb = True
+            # Conjugated forms
+            elif any(w.endswith(s) for s in _FR_VERB_SUFFIXES) and len(w) >= 4:
+                is_verb = True
+
+            if is_verb:
+                verb_indices.append(i)
+            else:
+                noun_indices.append(i)
+
+    elif lang == 'en':
+        for i, word in enumerate(words):
+            w = word.lower()
+            if len(w) < 3:
+                noun_indices.append(i)
+                continue
+
+            is_verb = False
+
+            if any(w.endswith(s) for s in _EN_STRONG_VERB_ENDINGS):
+                is_verb = True
+            elif w.endswith('ing') and len(w) >= 5:
+                is_verb = True
+            elif w.endswith('ize') or w.endswith('ise') and len(w) >= 5:
+                is_verb = True
+            elif w.endswith('ify') and len(w) >= 5:
+                is_verb = True
+            elif w.endswith('ate') and len(w) >= 5:
+                is_verb = True
+
+            if is_verb:
+                verb_indices.append(i)
+            else:
+                noun_indices.append(i)
+    else:
+        raise ValueError(f"Unsupported language for morpho split: {lang}")
+
+    print(f"  Morpho split ({lang}): {len(noun_indices)} nouns, {len(verb_indices)} verbs")
+    return noun_indices, verb_indices
+
+
 def pos_split_vocabulary(words: list, lang: str) -> tuple:
     """
     Split vocabulary into nouns and verbs using spaCy POS lexicon.
@@ -256,11 +416,40 @@ def main():
     parser.add_argument('--max-words', type=int, default=60000, help='Max words to keep (default: 60000)')
     parser.add_argument('--convert-muse', action='store_true', help='Convert MUSE alignment matrix')
     parser.add_argument('--pos-split', action='store_true', help='Split vocabulary by POS (noun/verb) using spaCy')
-    parser.add_argument('--lang', default=None, help='Language tag (fr/en) - required for --pos-split')
+    parser.add_argument('--split-uvec', action='store_true', help='Split existing .uvec into noun/verb via morphological heuristics (no spaCy)')
+    parser.add_argument('--lang', default=None, help='Language tag (fr/en) - required for --pos-split or --split-uvec')
 
     args = parser.parse_args()
 
-    if args.convert_muse:
+    if args.split_uvec:
+        if not args.lang:
+            parser.error("--lang is required for --split-uvec (fr or en)")
+        lang = args.lang.lower()
+        print(f"Splitting .uvec by morphology: {args.input} (lang={lang})")
+
+        words, vectors, dimension = load_uvec(args.input)
+
+        noun_indices, verb_indices = morpho_split_vocabulary(words, lang)
+
+        # Write noun .uvec (= everything that's not a verb)
+        noun_words = [words[i] for i in noun_indices]
+        noun_vectors = vectors[noun_indices]
+        noun_path = str(Path(args.input).parent / f"fasttext_{lang}_nouns.uvec")
+        print(f"\n  Writing nouns: {len(noun_words)} words")
+        write_uvec(noun_path, noun_words, noun_vectors, dimension)
+
+        # Write verb .uvec
+        verb_words = [words[i] for i in verb_indices]
+        verb_vectors = vectors[verb_indices]
+        verb_path = str(Path(args.input).parent / f"fasttext_{lang}_verbs.uvec")
+        print(f"\n  Writing verbs: {len(verb_words)} words")
+        write_uvec(verb_path, verb_words, verb_vectors, dimension)
+
+        print(f"\n  Summary:")
+        print(f"    Nouns: {len(noun_words)} words -> {noun_path}")
+        print(f"    Verbs: {len(verb_words)} words -> {verb_path}")
+
+    elif args.convert_muse:
         if not args.output:
             parser.error("--output is required for --convert-muse")
         print(f"Converting MUSE matrix: {args.input} -> {args.output}")

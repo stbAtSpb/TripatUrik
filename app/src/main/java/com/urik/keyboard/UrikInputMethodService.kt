@@ -2187,97 +2187,109 @@ class UrikInputMethodService :
             try {
                 val settings = settingsRepository.settings.first()
                 val primaryLang = languageManager.currentLanguage.value
-                val isBilingual = settings.bilingualGraphEnabled
-                val k = 8
-
-                // Ensure language(s) loaded
-                if (!fastTextEngine.isLoaded(primaryLang)) {
-                    Log.d(TAG_SEM, "triggerSemanticGraph: loading $primaryLang vectors...")
-                    fastTextEngine.loadLanguage(primaryLang)
-                }
-                if (isBilingual) {
-                    val secondaryLang = if (primaryLang == "fr") "en" else "fr"
-                    if (!fastTextEngine.isLoaded(secondaryLang)) {
-                        Log.d(TAG_SEM, "triggerSemanticGraph: loading $secondaryLang vectors...")
-                        fastTextEngine.loadLanguage(secondaryLang)
-                    }
-                }
-
-                // Find nearest neighbors
-                val startMs = System.currentTimeMillis()
-                val scored = if (isBilingual) {
-                    val secondaryLang = if (primaryLang == "fr") "en" else "fr"
-                    fastTextEngine.findKNearestBilingual(completedWord, primaryLang, secondaryLang, k)
-                } else {
-                    fastTextEngine.findKNearest(completedWord, primaryLang, k)
-                }
-
-                if (scored.isEmpty()) {
-                    Log.d(TAG_SEM, "triggerSemanticGraph: no neighbors found for '$completedWord'")
-                    return@launch
-                }
-
-                // Get anchor vector for PCA
-                val anchorVec = if (isBilingual) {
-                    fastTextEngine.getAlignedVector(completedWord, primaryLang)
-                } else {
-                    fastTextEngine.getVector(completedWord, primaryLang)
-                }
-                if (anchorVec == null) {
-                    Log.d(TAG_SEM, "triggerSemanticGraph: no vector for anchor '$completedWord'")
-                    return@launch
-                }
-
-                // Get neighbor vectors
-                val neighbors = scored.mapNotNull { sw ->
-                    val vec = if (isBilingual) {
-                        fastTextEngine.getAlignedVector(sw.word, sw.languageTag)
-                    } else {
-                        fastTextEngine.getVector(sw.word, sw.languageTag)
-                    }
-                    vec?.let { sw.word to it }
-                }
-                val langTags = scored.take(neighbors.size).map { it.languageTag }
-                val sims = scored.take(neighbors.size).map { it.similarity }
-
-                // Cache for rotation re-projection
-                lastAnchorWord = completedWord
-                lastAnchorVec = anchorVec
-                lastNeighbors = neighbors
-                lastLangTags = langTags
-                lastSims = sims
-
-                // Project to 2D via PCA
-                val projections = withContext(Dispatchers.Default) {
-                    PcaProjector.project(anchorVec, neighbors, langTags, sims)
-                }
-
-                val elapsed = System.currentTimeMillis() - startMs
-                Log.d(TAG_SEM, "triggerSemanticGraph: ${projections.size} nodes projected in ${elapsed}ms")
-
-                // Convert to GraphNodes and update overlay
-                val graphNodes = projections.map { proj ->
-                    SemanticGraphOverlay.GraphNode(
-                        word = proj.word,
-                        xPercent = proj.x,
-                        yPercent = proj.y,
-                        languageTag = proj.languageTag,
-                        similarity = proj.similarity,
-                    )
-                }
-
-                // Extract sentence context words for DNA spiral
-                val sentenceContext = withContext(Dispatchers.Main) {
-                    extractSentenceContextWords(completedWord)
-                }
-
-                withContext(Dispatchers.Main) {
-                    swipeKeyboardView?.setSemanticGraphContextWords(sentenceContext)
-                    swipeKeyboardView?.setSemanticGraphNodes(completedWord, graphNodes)
-                }
+                computeAndShowSingleGraph(completedWord, settings, primaryLang)
             } catch (e: Exception) {
                 Log.e(TAG_SEM, "triggerSemanticGraph: error computing graph", e)
             }
+        }
+    }
+
+    /**
+     * Compute single-graph neighbors + PCA and show on overlay.
+     * Can be called from triggerSemanticGraph or as fallback from triggerTrigramGraph.
+     */
+    private suspend fun computeAndShowSingleGraph(
+        completedWord: String,
+        settings: KeyboardSettings,
+        primaryLang: String,
+    ) {
+        val isBilingual = settings.bilingualGraphEnabled
+        val k = 8
+
+        // Ensure language(s) loaded
+        if (!fastTextEngine.isLoaded(primaryLang)) {
+            Log.d(TAG_SEM, "computeAndShowSingleGraph: loading $primaryLang vectors...")
+            fastTextEngine.loadLanguage(primaryLang)
+        }
+        if (isBilingual) {
+            val secondaryLang = if (primaryLang == "fr") "en" else "fr"
+            if (!fastTextEngine.isLoaded(secondaryLang)) {
+                Log.d(TAG_SEM, "computeAndShowSingleGraph: loading $secondaryLang vectors...")
+                fastTextEngine.loadLanguage(secondaryLang)
+            }
+        }
+
+        // Find nearest neighbors
+        val startMs = System.currentTimeMillis()
+        val scored = if (isBilingual) {
+            val secondaryLang = if (primaryLang == "fr") "en" else "fr"
+            fastTextEngine.findKNearestBilingual(completedWord, primaryLang, secondaryLang, k)
+        } else {
+            fastTextEngine.findKNearest(completedWord, primaryLang, k)
+        }
+
+        if (scored.isEmpty()) {
+            Log.d(TAG_SEM, "computeAndShowSingleGraph: no neighbors found for '$completedWord'")
+            return
+        }
+
+        // Get anchor vector for PCA
+        val anchorVec = if (isBilingual) {
+            fastTextEngine.getAlignedVector(completedWord, primaryLang)
+        } else {
+            fastTextEngine.getVector(completedWord, primaryLang)
+        }
+        if (anchorVec == null) {
+            Log.d(TAG_SEM, "computeAndShowSingleGraph: no vector for anchor '$completedWord'")
+            return
+        }
+
+        // Get neighbor vectors
+        val neighbors = scored.mapNotNull { sw ->
+            val vec = if (isBilingual) {
+                fastTextEngine.getAlignedVector(sw.word, sw.languageTag)
+            } else {
+                fastTextEngine.getVector(sw.word, sw.languageTag)
+            }
+            vec?.let { sw.word to it }
+        }
+        val langTags = scored.take(neighbors.size).map { it.languageTag }
+        val sims = scored.take(neighbors.size).map { it.similarity }
+
+        // Cache for rotation re-projection
+        lastAnchorWord = completedWord
+        lastAnchorVec = anchorVec
+        lastNeighbors = neighbors
+        lastLangTags = langTags
+        lastSims = sims
+
+        // Project to 2D via PCA
+        val projections = withContext(Dispatchers.Default) {
+            PcaProjector.project(anchorVec, neighbors, langTags, sims)
+        }
+
+        val elapsed = System.currentTimeMillis() - startMs
+        Log.d(TAG_SEM, "computeAndShowSingleGraph: ${projections.size} nodes projected in ${elapsed}ms")
+
+        // Convert to GraphNodes and update overlay
+        val graphNodes = projections.map { proj ->
+            SemanticGraphOverlay.GraphNode(
+                word = proj.word,
+                xPercent = proj.x,
+                yPercent = proj.y,
+                languageTag = proj.languageTag,
+                similarity = proj.similarity,
+            )
+        }
+
+        // Extract sentence context words for DNA spiral
+        val sentenceContext = withContext(Dispatchers.Main) {
+            extractSentenceContextWords(completedWord)
+        }
+
+        withContext(Dispatchers.Main) {
+            swipeKeyboardView?.setSemanticGraphContextWords(sentenceContext)
+            swipeKeyboardView?.setSemanticGraphNodes(completedWord, graphNodes)
         }
     }
 
@@ -2312,86 +2324,91 @@ class UrikInputMethodService :
                 val secondaryLang = if (primaryLang == "fr") "en" else "fr"
                 val k = 6 // k per zone (15-18 total)
 
-                // Ensure category stores are loaded
-                fastTextEngine.loadTrigramStores(
-                    primaryLang,
-                    if (isBilingual) secondaryLang else null,
-                )
+                // Always load both languages for trigram (word may be in either language)
+                fastTextEngine.loadTrigramStores(primaryLang, secondaryLang)
 
-                // Determine anchors: fallback = all 3 anchors are the completed word
-                val subjectAnchor = completedWord
-                val verbAnchor = completedWord
-                val objectAnchor = completedWord
-
-                val startMs = System.currentTimeMillis()
-
-                // Find k-NN in parallel for each zone
-                val subjectScored = if (isBilingual) {
-                    fastTextEngine.findKNearestBilingual(subjectAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.NOUN, k)
-                } else {
-                    fastTextEngine.findKNearest(subjectAnchor, primaryLang, FastTextEngine.WordCategory.NOUN, k)
-                }
-
-                val verbScored = if (isBilingual) {
-                    fastTextEngine.findKNearestBilingual(verbAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.VERB, k)
-                } else {
-                    fastTextEngine.findKNearest(verbAnchor, primaryLang, FastTextEngine.WordCategory.VERB, k)
-                }
-
-                val objectScored = if (isBilingual) {
-                    fastTextEngine.findKNearestBilingual(objectAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.NOUN, k)
-                } else {
-                    fastTextEngine.findKNearest(objectAnchor, primaryLang, FastTextEngine.WordCategory.NOUN, k)
-                }
-
-                if (subjectScored.isEmpty() && verbScored.isEmpty() && objectScored.isEmpty()) {
-                    Log.d(TAG_SEM, "triggerTrigramGraph: no neighbors found for '$completedWord'")
-                    // Fall back to single-graph mode
-                    triggerSemanticGraph(completedWord)
+                // If no category stores loaded for either language, fall back to single-graph
+                val hasNounStore = fastTextEngine.isCategoryLoaded(primaryLang, FastTextEngine.WordCategory.NOUN)
+                    || fastTextEngine.isCategoryLoaded(secondaryLang, FastTextEngine.WordCategory.NOUN)
+                val hasVerbStore = fastTextEngine.isCategoryLoaded(primaryLang, FastTextEngine.WordCategory.VERB)
+                    || fastTextEngine.isCategoryLoaded(secondaryLang, FastTextEngine.WordCategory.VERB)
+                if (!hasNounStore && !hasVerbStore) {
+                    Log.d(TAG_SEM, "triggerTrigramGraph: no category stores available, falling back to single-graph")
+                    computeAndShowSingleGraph(completedWord, settings, primaryLang)
                     return@launch
                 }
 
-                // Get anchor vectors (try noun store first, then verb, then legacy)
-                val subjectAnchorVec = getTrigramAnchorVector(subjectAnchor, primaryLang, isBilingual, FastTextEngine.WordCategory.NOUN)
-                val verbAnchorVec = getTrigramAnchorVector(verbAnchor, primaryLang, isBilingual, FastTextEngine.WordCategory.VERB)
-                val objectAnchorVec = getTrigramAnchorVector(objectAnchor, primaryLang, isBilingual, FastTextEngine.WordCategory.NOUN)
+                // Move all heavy computation off main thread
+                val trigramResult = withContext(Dispatchers.Default) {
+                    val subjectAnchor = completedWord
+                    val verbAnchor = completedWord
+                    val objectAnchor = completedWord
 
-                if (subjectAnchorVec == null || verbAnchorVec == null || objectAnchorVec == null) {
-                    Log.d(TAG_SEM, "triggerTrigramGraph: missing anchor vector for '$completedWord', falling back")
-                    triggerSemanticGraph(completedWord)
-                    return@launch
-                }
+                    val startMs = System.currentTimeMillis()
 
-                // Get neighbor vectors for each zone
-                fun getNeighborData(scored: List<FastTextEngine.ScoredWord>, category: FastTextEngine.WordCategory): Triple<List<Pair<String, FloatArray>>, List<String>, List<Float>> {
-                    val neighbors = scored.mapNotNull { sw ->
-                        val vec = if (isBilingual) {
-                            fastTextEngine.getAlignedVector(sw.word, sw.languageTag, category)
-                        } else {
-                            fastTextEngine.getVector(sw.word, sw.languageTag, category)
-                        }
-                        vec?.let { sw.word to it }
+                    // Find k-NN bilingual for each zone
+                    val subjectScored = fastTextEngine.findKNearestBilingual(
+                        subjectAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.NOUN, k,
+                    )
+                    val verbScored = fastTextEngine.findKNearestBilingual(
+                        verbAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.VERB, k,
+                    )
+                    val objectScored = fastTextEngine.findKNearestBilingual(
+                        objectAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.NOUN, k,
+                    )
+
+                    if (subjectScored.isEmpty() && verbScored.isEmpty() && objectScored.isEmpty()) {
+                        Log.d(TAG_SEM, "triggerTrigramGraph: no neighbors found for '$completedWord'")
+                        return@withContext null
                     }
-                    val langTags = scored.take(neighbors.size).map { it.languageTag }
-                    val sims = scored.take(neighbors.size).map { it.similarity }
-                    return Triple(neighbors, langTags, sims)
-                }
 
-                val (subjectNeighbors, subjectLangTags, subjectSims) = getNeighborData(subjectScored, FastTextEngine.WordCategory.NOUN)
-                val (verbNeighbors, verbLangTags, verbSims) = getNeighborData(verbScored, FastTextEngine.WordCategory.VERB)
-                val (objectNeighbors, objectLangTags, objectSims) = getNeighborData(objectScored, FastTextEngine.WordCategory.NOUN)
+                    // Get anchor vectors (always bilingual — try both languages)
+                    val subjectAnchorVec = getTrigramAnchorVector(subjectAnchor, primaryLang, true, FastTextEngine.WordCategory.NOUN)
+                    val verbAnchorVec = getTrigramAnchorVector(verbAnchor, primaryLang, true, FastTextEngine.WordCategory.VERB)
+                    val objectAnchorVec = getTrigramAnchorVector(objectAnchor, primaryLang, true, FastTextEngine.WordCategory.NOUN)
 
-                // Project via PCA to 3 zones
-                val trigramProjections = withContext(Dispatchers.Default) {
-                    PcaProjector.projectTrigram(
+                    if (subjectAnchorVec == null || verbAnchorVec == null || objectAnchorVec == null) {
+                        Log.d(TAG_SEM, "triggerTrigramGraph: missing anchor vector for '$completedWord'")
+                        return@withContext null
+                    }
+
+                    // Get neighbor vectors for each zone (always aligned for bilingual trigram)
+                    fun getNeighborData(scored: List<FastTextEngine.ScoredWord>, category: FastTextEngine.WordCategory): Triple<List<Pair<String, FloatArray>>, List<String>, List<Float>> {
+                        val neighbors = scored.mapNotNull { sw ->
+                            val vec = fastTextEngine.getAlignedVector(sw.word, sw.languageTag, category)
+                            vec?.let { sw.word to it }
+                        }
+                        val langTags = scored.take(neighbors.size).map { it.languageTag }
+                        val sims = scored.take(neighbors.size).map { it.similarity }
+                        return Triple(neighbors, langTags, sims)
+                    }
+
+                    val (subjectNeighbors, subjectLangTags, subjectSims) = getNeighborData(subjectScored, FastTextEngine.WordCategory.NOUN)
+                    val (verbNeighbors, verbLangTags, verbSims) = getNeighborData(verbScored, FastTextEngine.WordCategory.VERB)
+                    val (objectNeighbors, objectLangTags, objectSims) = getNeighborData(objectScored, FastTextEngine.WordCategory.NOUN)
+
+                    // Project via PCA to 3 zones
+                    val trigramProjections = PcaProjector.projectTrigram(
                         subjectAnchor, subjectAnchorVec, subjectNeighbors, subjectLangTags, subjectSims,
                         verbAnchor, verbAnchorVec, verbNeighbors, verbLangTags, verbSims,
                         objectAnchor, objectAnchorVec, objectNeighbors, objectLangTags, objectSims,
                     )
+
+                    val elapsed = System.currentTimeMillis() - startMs
+                    Log.d(TAG_SEM, "triggerTrigramGraph: projected S=${subjectNeighbors.size} V=${verbNeighbors.size} O=${objectNeighbors.size} in ${elapsed}ms")
+
+                    Triple(trigramProjections, listOf(subjectAnchor, verbAnchor, objectAnchor), Unit)
                 }
 
-                val elapsed = System.currentTimeMillis() - startMs
-                Log.d(TAG_SEM, "triggerTrigramGraph: projected S=${subjectNeighbors.size} V=${verbNeighbors.size} O=${objectNeighbors.size} in ${elapsed}ms")
+                // Null result means fallback needed
+                if (trigramResult == null) {
+                    withContext(Dispatchers.Main) {
+                        computeAndShowSingleGraph(completedWord, settings, primaryLang)
+                    }
+                    return@launch
+                }
+
+                val (trigramProjections, anchors, _) = trigramResult
 
                 // Convert to GraphNodes
                 fun toGraphNodes(projections: List<PcaProjector.Projection2D>): List<SemanticGraphOverlay.GraphNode> {
@@ -2407,11 +2424,11 @@ class UrikInputMethodService :
                 }
 
                 val trigramData = SemanticGraphOverlay.TrigramGraphData(
-                    subjectAnchor = subjectAnchor,
+                    subjectAnchor = anchors[0],
                     subjectNodes = toGraphNodes(trigramProjections[0].projections),
-                    verbAnchor = verbAnchor,
+                    verbAnchor = anchors[1],
                     verbNodes = toGraphNodes(trigramProjections[1].projections),
-                    objectAnchor = objectAnchor,
+                    objectAnchor = anchors[2],
                     objectNodes = toGraphNodes(trigramProjections[2].projections),
                 )
 
@@ -2439,26 +2456,20 @@ class UrikInputMethodService :
         isBilingual: Boolean,
         category: FastTextEngine.WordCategory,
     ): FloatArray? {
-        return if (isBilingual) {
-            fastTextEngine.getAlignedVector(word, primaryLang, category)
-        } else {
-            fastTextEngine.getVector(word, primaryLang, category)
-        } ?: run {
-            // Fallback: try the other category
-            val otherCategory = if (category == FastTextEngine.WordCategory.NOUN) FastTextEngine.WordCategory.VERB else FastTextEngine.WordCategory.NOUN
-            if (isBilingual) {
-                fastTextEngine.getAlignedVector(word, primaryLang, otherCategory)
-            } else {
-                fastTextEngine.getVector(word, primaryLang, otherCategory)
-            }
-        } ?: run {
-            // Final fallback: try legacy full store
-            if (isBilingual) {
-                fastTextEngine.getAlignedVector(word, primaryLang)
-            } else {
-                fastTextEngine.getVector(word, primaryLang)
-            }
-        }
+        val secondaryLang = if (primaryLang == "fr") "en" else "fr"
+        val otherCategory = if (category == FastTextEngine.WordCategory.NOUN) FastTextEngine.WordCategory.VERB else FastTextEngine.WordCategory.NOUN
+
+        // 1. Try primary lang, requested category
+        return fastTextEngine.getAlignedVector(word, primaryLang, category)
+            // 2. Try secondary lang, requested category
+            ?: fastTextEngine.getAlignedVector(word, secondaryLang, category)
+            // 3. Try primary lang, other category
+            ?: fastTextEngine.getAlignedVector(word, primaryLang, otherCategory)
+            // 4. Try secondary lang, other category
+            ?: fastTextEngine.getAlignedVector(word, secondaryLang, otherCategory)
+            // 5. Final fallback: legacy full store
+            ?: fastTextEngine.getAlignedVector(word, primaryLang)
+            ?: fastTextEngine.getAlignedVector(word, secondaryLang)
     }
 
     /**

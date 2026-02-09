@@ -1,466 +1,192 @@
-# Feature Specification: TripatEvoleOne - Clavier Concentrique Contextuel
+# Feature Specification: TripatEvoleOne — Exploration Semantique sans Friction
 
 **Feature Branch**: `tripatevoleOne`
 **Created**: 2026-02-08
 **Updated**: 2026-02-09
-**Status**: In Progress (Phase 2 - Trigram S-V-O)
-**Constitution**: Tripat v1.0.0
+**Status**: In Progress — Pivot UX en cours
+**Constitution**: Tripat v2.0.0
+
+---
 
 ## Vision
 
-Remplacer le layout AZERTY classique par un **clavier concentrique** organise en anneaux concentriques autour de la lettre saisie. Chaque anneau represente un niveau d'abstraction croissant, des lettres brutes jusqu'aux humeurs et actions contextuelles. Les bulles s'auto-arrangent en temps reel pour eviter la superposition, et le contexte de la phrase guide les suggestions a chaque niveau.
+### Le dilemme fondamental
 
-### Architecture des anneaux
+Le clavier swipe (type SwiftKey) est extremement performant pour la **saisie rapide d'idees connues**. L'utilisateur sait ce qu'il veut dire, le swipe accelere la frappe. Mais il manque une capacite cruciale : **visualiser et choisir des alternatives proches ou nuancees** qui permettraient d'etre plus inspire, plus precis, ou plus creatif.
+
+### Deux modes cognitifs, un seul outil
+
+L'utilisateur alterne en permanence entre deux etats mentaux :
 
 ```
-Anneau 0 (centre)  : Lettre saisie / point de frappe
-Anneau 1 (lettres) : Lettres statistiquement les plus probables comme prochain caractere
-Anneau 2 (mots)    : Mots les plus frequents / probables (bubbles)
-Anneau 3 (abstraits): Mots plus abstraits / semantiquement lies au contexte
-Anneau 4 (concepts) : Concepts a niveau d'abstraction superieur
-Anneau 5 (humeurs)  : Humeurs, emotions, actions frequentes liees au contexte de la phrase
+MODE FLUIDE                          MODE REFLEXIF
+"Je sais ce que je veux dire"        "Je cherche le mot juste"
+                                     "Je cherche l'idee suivante"
+     │                                    │
+     │  Swipe rapide                      │  Exploration semantique
+     │  Suggestion frequentielle          │  Associations, nuances
+     │  Optimisation du debit             │  Divergence creative
+     │                                    │
+     └── Ne PAS interrompre ──────────────└── Aider SANS casser le flow
 ```
+
+### Principe directeur : extension continue, pas basculement
+
+**L'exploration semantique doit etre une extension naturelle de la suggestion, pas un mode alternatif.** L'utilisateur ne devrait jamais avoir a "quitter" le clavier pour explorer — l'exploration doit s'integrer progressivement dans l'interface de saisie.
+
+---
 
 ## Non-Negotiable Objectives
 
-1. **Privacy First**: Zero donnee hors du device. Tout le modele de prediction/contexte tourne en local.
-2. **No Regression**: Le clavier AZERTY classique reste disponible comme option. L'utilisateur peut basculer entre les deux modes.
-3. **API Compatibility**: Android API 26-35.
-4. **Performance**: Le calcul des anneaux et l'auto-arrangement des bulles ne doivent pas provoquer de lag perceptible (<16ms par frame pour 60fps).
-5. **Test-First**: Tests ecrits et approuves avant implementation.
-6. **Anti-Occlusion**: Les bulles ne doivent JAMAIS se superposer. L'algorithme d'arrangement est non-negociable.
-7. **Lisibilite**: Les textes dans les bulles doivent rester lisibles quelle que soit la densite de suggestions.
-8. **User-Interaction Semantique (Multi-Pinch Rotation)**: Lors de la selection d'un mot dans un anneau, l'utilisateur peut effectuer un geste multi-pinch (rotation a deux doigts) pour faire tourner le referentiel des valeurs propres/vecteurs propres (eigenvalues/eigenvectors) associe a ce mot. Cette rotation pivote la projection 2D de l'espace semantique, revelant de nouvelles proximites selon un axe semantique different. Exemple : si le mot "froid" est affiche, il s'oppose a "tiede/chaud/brulant" selon l'axe semantique de temperature. Un multi-pinch permet de pivoter autour de cet axe pour reveler d'autres dimensions (ex: "froid" vers "distant/glacial/austere" sur un axe emotionnel). L'algorithme utilise des methodes d'analyse multidimensionnelle (ACP, AFD, ou equivalent optimise) pour ordonner les proximites informationnelles selon la projection portant le maximum d'information correlee (variance expliquee maximale = proximite semantique optimale).
-
-## User Scenarios & Testing *(mandatory)*
-
-### User Story 1 - Saisie par cercle de lettres (Priority: P1)
-
-En tant qu'utilisateur, je veux taper du texte en touchant le centre de l'ecran clavier, puis voir apparaitre autour de mon doigt un cercle de lettres candidates (les plus probables statistiquement) que je peux selectionner par glissement.
-
-**Why this priority**: C'est le MVP minimal - sans la saisie de base par cercle de lettres, rien d'autre ne fonctionne. Cela remplace le layout AZERTY comme methode d'input primaire.
-
-**Independent Test**: L'utilisateur peut composer le mot "bonjour" en utilisant uniquement le cercle concentrique de lettres, sans aucun autre anneau.
-
-**Acceptance Scenarios**:
-
-1. **Given** le clavier concentrique est actif, **When** l'utilisateur touche la zone de saisie, **Then** un cercle de lettres candidates apparait autour du point de contact
-2. **Given** le cercle de lettres est affiche, **When** l'utilisateur glisse vers la lettre 'b', **Then** la lettre 'b' est saisie et le cercle se recalcule pour les lettres probables apres 'b'
-3. **Given** l'utilisateur a saisi "bon", **When** le cercle suivant apparait, **Then** les lettres 'j', 's', 'n' sont parmi les plus proches du centre (les plus probables)
-4. **Given** le clavier concentrique est actif, **When** l'utilisateur veut revenir au mode AZERTY, **Then** un bouton/geste permet de basculer instantanement
+1. **Zero interruption du flow** : L'aide semantique ne doit JAMAIS interrompre un utilisateur en train de taper vite. Elle n'apparait que quand l'utilisateur la cherche ou fait une pause.
+2. **Privacy First** : Zero donnee hors du device. Tout tourne en local (FastText, ACP, modeles).
+3. **No Regression** : Le clavier swipe/AZERTY reste la methode d'input primaire. L'exploration est un supplement, pas un remplacement.
+4. **API Compatibility** : Android API 26-35.
+5. **Performance** : Toute computation semantique doit etre async (off main thread). Le clavier ne lag JAMAIS.
+6. **Lisibilite** : Toute information semantique affichee doit etre immediatement comprehensible.
 
 ---
 
-### User Story 2 - Suggestions de mots en bulles (Priority: P2)
+## Architecture UX : 3 niveaux de profondeur semantique
 
-En tant qu'utilisateur, apres avoir tape quelques lettres, je veux voir apparaitre un 2eme anneau de bulles contenant les mots les plus probables que je peux taper pour auto-completer le mot en cours.
+L'exploration semantique s'organise en 3 niveaux de profondeur croissante, accessibles par des gestes de plus en plus deliberes. Chaque niveau preserve le contexte du niveau precedent.
 
-**Why this priority**: L'auto-completion par mots est le premier gain de productivite majeur au-dela de la simple saisie lettre par lettre.
+### Niveau 1 : Barre de suggestions enrichie (ambient)
 
-**Independent Test**: Apres avoir tape "bon", l'utilisateur voit des bulles "bonjour", "bonne", "bonheur" dans l'anneau 2 et peut taper une bulle pour inserer le mot complet.
+**Declencheur** : Toujours visible pendant la frappe (remplace la barre de suggestions classique).
 
-**Acceptance Scenarios**:
+```
+┌──────────────────────────────────────────────────┐
+│  [exact]  │  [nuance proche]  │  [distant inspirant] │
+│  bonjour  │  salut            │  bienvenue           │
+│           │                   │                      │
+│  ← frequence               semantique →              │
+└──────────────────────────────────────────────────┘
+```
 
-1. **Given** l'utilisateur a saisi "bon", **When** l'anneau de mots s'affiche, **Then** les bulles contiennent les mots les plus frequents commencant par "bon"
-2. **Given** des bulles de mots sont affichees, **When** l'utilisateur tape sur "bonjour", **Then** le mot "bonjour" est insere dans le champ de saisie et remplace les lettres deja tapees
-3. **Given** 5+ bulles de mots sont candidates, **When** elles s'affichent, **Then** aucune bulle ne chevauche une autre bulle (anti-occlusion)
+**Principe** : La barre de 3 suggestions n'affiche plus 3 synonymes frequentiels mais un **gradient semantique** :
+- **Slot 1** (gauche) : suggestion la plus probable (frequence + contexte), comme aujourd'hui
+- **Slot 2** (centre) : variante proche mais nuancee (proximite semantique moyenne)
+- **Slot 3** (droite) : alternative plus distante, potentiellement inspirante (proximite semantique faible mais coherente)
+
+**Calcul** : Les 3 suggestions sont extraites du voisinage FastText du dernier mot, filtrees par coherence avec le contexte de la phrase. Le slot 1 reste frequentiel, les slots 2-3 sont semantiques.
+
+**Impact flow** : Nul. La barre est deja la, seul son contenu change.
+
+### Niveau 2 : Eventail semantique (pull-up)
+
+**Declencheur** : Pull-up (glissement vers le haut) sur la barre de suggestions, OU pause de frappe >1.5 secondes.
+
+```
+                    ┌─────────────────────┐
+                   ╱  arc de 8-12 mots     ╲
+                  ╱   disposes en eventail   ╲
+                 ╱    selon proximite ACP      ╲
+                ╱                                ╲
+┌──────────────────────────────────────────────────┐
+│  [exact]  │  [nuance proche]  │  [distant]       │
+└──────────────────────────────────────────────────┘
+│                   CLAVIER                         │
+```
+
+**Principe** : Un arc de mots (8-12) s'ouvre au-dessus de la barre, projetes par ACP dans un demi-cercle. La position angulaire encode l'axe semantique principal :
+- **Gauche de l'arc** : un pole semantique (ex: concret, quotidien, froid)
+- **Droite de l'arc** : le pole oppose (ex: abstrait, solennel, chaud)
+- **Distance au centre** : force de la correlation semantique
+
+**Les axes comme questions** : L'axe principal (PC1) est interprete et affiche comme une **question implicite** au-dessus de l'eventail :
+
+```
+        ← cuisine domestique ... gastronomie →
+                    ┌──────────┐
+                   ╱  casserole  repas  diner  ╲
+                  ╱   soupe    MANGER   festin   ╲
+                 ╱    grignoter   deguster  banquet ╲
+```
+
+L'utilisateur ne navigue pas dans un nuage abstrait — il **repond a une question semantique** en choisissant un mot le long de l'axe.
+
+**Interaction** :
+- Tap sur un mot → insertion + retour au clavier
+- Multi-pinch rotation → pivoter vers un autre axe semantique (PC3/PC4), revelant une nouvelle "question" (ex: "besoin vital ↔ plaisir social")
+- Swipe down → fermer l'eventail
+
+**Impact flow** : Minimal. L'eventail apparait au-dessus du clavier, le clavier reste visible et utilisable. Taper une lettre ferme automatiquement l'eventail.
+
+### Niveau 3 : Graphe S-V-O (exploration profonde)
+
+**Declencheur** : Pull-up prolonge (>300ms) ou double-tap sur la barre de suggestions. Geste delibere = l'utilisateur VEUT explorer.
+
+```
+┌──────────────────────────────────────────────────┐
+│  SUJET          │  ACTION          │  OBJET       │
+│                 │                  │              │
+│   ○ animal      │   ○ devorer      │   ○ proie    │
+│  ○ predateur    │  ● MANGER       │  ○ repas     │
+│   ○ chat        │   ○ savourer    │   ○ plat     │
+│  ○ convive      │   ○ cuisiner    │  ○ dessert   │
+│                 │                  │              │
+│  ← PC1: sauvage ... domestique →  │              │
+└──────────────────────────────────────────────────┘
+```
+
+**Principe** : Le graphe tri-zone Sujet-Verbe-Objet (implemente en Phase 2) en plein ecran. L'utilisateur compose visuellement des combinaisons S-V-O : c'est de la **combinatoire creative assistee**. Chaque zone est une ACP independante dans sa categorie grammaticale.
+
+**Les axes comme questions (tri-zone)** : Chaque zone affiche son axe semantique principal :
+- Zone SUJET : "← individu ... collectif →"
+- Zone ACTION : "← subir ... agir →"
+- Zone OBJET : "← concret ... abstrait →"
+
+**Mode bilingue** : Les noeuds FR et EN sont affiches simultanement avec des couleurs distinctes (FR bleu, EN rouge). Permet la fonctionalite de **neologisme multilingual** : l'utilisateur selectionne 2 mots de langues differentes pour generer un mot-valise bilingue.
+
+**Interaction** :
+- Tap sur un noeud dans une zone → cette zone se recentre sur le mot choisi (les 2 autres zones conservent leur etat)
+- Multi-pinch → rotation ACP par zone
+- Tap sur un noeud + swipe down → insertion du mot et retour au clavier
+- Toute frappe clavier → fermeture immediate du graphe
 
 ---
 
-### User Story 3 - Auto-arrangement des bulles (Priority: P3)
+## Declenchement intelligent : respecter le flow
 
-En tant qu'utilisateur, je veux que toutes les bulles (quel que soit l'anneau) s'arrangent automatiquement pour eviter toute superposition, avec les elements les plus pertinents les plus proches du centre.
+### Quand NE PAS afficher l'aide semantique
 
-**Why this priority**: Sans l'auto-arrangement, l'interface devient inutilisable des que le nombre de suggestions augmente. C'est le fondement de l'UX.
+- L'utilisateur tape a >40 mots/minute (mode fluide detecte)
+- L'utilisateur est en train de swiper (geste en cours)
+- Le champ de saisie est un mot de passe ou un champ sensible
+- Moins de 2 mots ont ete tapes dans la phrase (pas assez de contexte)
 
-**Independent Test**: Afficher 20+ bulles sur 3 anneaux simultanement - aucune superposition, toutes les bulles lisibles.
+### Quand afficher l'aide semantique
 
-**Acceptance Scenarios**:
+| Signal                          | Niveau declenche | Justification                              |
+|---------------------------------|------------------|--------------------------------------------|
+| Frappe normale                  | Niveau 1         | Barre enrichie toujours visible            |
+| Pause >1.5s apres validation    | Niveau 2         | L'utilisateur cherche le mot suivant       |
+| Pull-up sur barre suggestions  | Niveau 2         | Geste intentionnel d'exploration           |
+| Pull-up prolonge (>300ms)      | Niveau 3         | Geste delibere = exploration profonde      |
+| Double-tap barre suggestions   | Niveau 3         | Raccourci explicite                        |
 
-1. **Given** plusieurs anneaux sont affiches, **When** de nouvelles suggestions arrivent, **Then** les bulles existantes se repositionnent avec une animation fluide
-2. **Given** l'espace est contraint (petit ecran), **When** trop de bulles sont candidates, **Then** seules les N plus pertinentes sont affichees, avec indication qu'il y en a d'autres
-3. **Given** des bulles de differentes tailles (mots courts/longs), **When** elles sont disposees, **Then** elles ne se chevauchent jamais et restent dans leur anneau
+### Auto-dismiss
 
----
-
-### User Story 4 - Suggestions contextuelles abstraites (Priority: P4)
-
-En tant qu'utilisateur, apres avoir commence une phrase, je veux voir dans l'anneau 3 des mots semantiquement lies au contexte de ma phrase, meme s'ils ne commencent pas par les lettres tapees.
-
-**Why this priority**: C'est le premier saut qualitatif par rapport a un auto-complete classique. L'utilisateur peut saisir des idees, pas seulement des caracteres.
-
-**Independent Test**: Apres avoir tape "je suis content de", l'anneau 3 propose des mots comme "retrouver", "voir", "partager" bases sur le contexte semantique.
-
-**Acceptance Scenarios**:
-
-1. **Given** l'utilisateur a tape "je suis content de", **When** l'anneau 3 s'affiche, **Then** il contient des verbes/mots contextuellement pertinents
-2. **Given** l'utilisateur selectionne "voir" dans l'anneau 3, **When** le mot est insere, **Then** tous les anneaux se recalculent pour le nouveau contexte "je suis content de voir"
+- Niveau 2 : se ferme apres 3s sans interaction, ou si l'utilisateur tape une lettre
+- Niveau 3 : se ferme apres 5s sans interaction, ou si l'utilisateur tape une lettre
+- Tout niveau : swipe down pour fermer explicitement
 
 ---
 
-### User Story 5 - Concepts et associations (Priority: P5)
+## Fondements mathematiques
 
-En tant qu'utilisateur, je veux voir dans l'anneau 4 des concepts de plus haut niveau lies a ma phrase (themes, categories, associations d'idees).
+### Pourquoi l'ACP produit des axes semantiques
 
-**Why this priority**: Niveau d'abstraction superieur qui aide a la creativite et a l'expression d'idees complexes.
+Les vecteurs FastText (100D, pre-entraines par skip-gram) encodent la semantique distributionnelle : des mots apparaissant dans des contextes similaires ont des vecteurs proches. L'arithmetique vectorielle a du sens (`roi - homme + femme ≈ reine`).
 
-**Independent Test**: En tapant une phrase sur le voyage, l'anneau 4 propose des concepts comme "aventure", "decouverte", "culture".
+Quand on fait l'ACP sur un voisinage de k mots :
+1. On centre les vecteurs (soustrait la moyenne)
+2. La matrice de covariance capture comment les mots varient ensemble dans les 100 dimensions
+3. Les eigenvectors de plus grande eigenvalue = directions de **variance maximale**
+4. Ces directions **sont** les axes semantiques dominants du voisinage
 
-**Acceptance Scenarios**:
-
-1. **Given** l'utilisateur ecrit sur un sujet identifiable, **When** l'anneau 4 s'affiche, **Then** il propose des concepts thematiquement lies
-2. **Given** le contexte change au fil de la phrase, **When** l'utilisateur continue a taper, **Then** les concepts se mettent a jour en temps reel
-
----
-
-### User Story 6 - Humeurs et actions contextuelles (Priority: P6)
-
-En tant qu'utilisateur, je veux voir dans l'anneau 5 (le plus externe) des suggestions d'humeurs, d'emotions ou d'actions frequentes liees au contexte de ma conversation.
-
-**Why this priority**: Le dernier niveau d'abstraction - transforme le clavier en assistant de communication contextuel.
-
-**Independent Test**: En tapant un message dans une app de messagerie, l'anneau 5 propose des emojis d'humeur, des actions comme "appeler", "envoyer photo", ou des expressions comme "a bientot".
-
-**Acceptance Scenarios**:
-
-1. **Given** l'utilisateur ecrit un message, **When** l'anneau 5 s'affiche, **Then** il propose des humeurs/actions coherentes avec le ton du message
-2. **Given** le ton du message est joyeux, **When** les suggestions d'humeur s'affichent, **Then** elles refletent la joie (emojis, expressions positives)
-
----
-
-### Edge Cases
-
-- Que se passe-t-il quand l'utilisateur tape dans une langue non supportee ?
-- Comment gerer un ecran tres petit (montres ? mode split-screen) ?
-- Que se passe-t-il si le modele de prediction n'a pas assez de contexte (debut de phrase) ?
-- Comment gerer la saisie de chiffres, symboles et caracteres speciaux dans le mode concentrique ?
-- Que se passe-t-il si l'utilisateur tape tres vite - les anneaux se recalculent-ils a chaque lettre ou avec du debounce ?
-- Comment gerer le passage entre mode concentrique et mode AZERTY en milieu de mot ?
-
-## Requirements *(mandatory)*
-
-### Functional Requirements
-
-- **FR-001**: Le systeme DOIT afficher un cercle de lettres candidates autour du point de touche
-- **FR-002**: Le systeme DOIT calculer la probabilite des lettres suivantes basee sur les bigrammes/trigrammes de la langue
-- **FR-003**: Le systeme DOIT afficher des bulles de mots candidats dans l'anneau 2
-- **FR-004**: L'algorithme d'auto-arrangement DOIT garantir zero superposition de bulles
-- **FR-005**: Le systeme DOIT mettre a jour les suggestions en temps reel a chaque caractere saisi
-- **FR-006**: Le systeme DOIT permettre la bascule AZERTY <-> Concentrique a tout moment
-- **FR-007**: Le systeme DOIT fonctionner avec le dictionnaire local existant (aucun acces reseau)
-- **FR-008**: Les animations de repositionnement des bulles DOIVENT etre fluides (60fps)
-- **FR-009**: Le systeme utilise une architecture hybride a 2 moteurs :
-  - **Moteur 1 (FastText, ~50MB)** : Vecteurs de mots statiques pre-entraines pour les anneaux 1-3 et la rotation multi-pinch ACP/eigenvector. Lookup O(1), calcul ACP temps reel.
-  - **Moteur 2 (Gemma 3 Nano via AI Edge SDK, optionnel)** : Pour les anneaux 4-5 (concepts abstraits, humeurs). Necessite comprehension du sens de la phrase entiere. Ajoute en phase ulterieure si performance OK sur Snapdragon 855.
-- **FR-010**: Les vecteurs FastText francais DOIVENT etre compresses (quantization) pour tenir dans ~50MB en memoire
-- **FR-011**: Le calcul ACP/decomposition en valeurs propres pour la rotation multi-pinch DOIT s'executer en < 16ms
-
-### Key Entities
-
-- **BubbleRing**: Un anneau concentrique contenant des BubbleItems a un rayon donne
-- **BubbleItem**: Un element cliquable (lettre, mot, concept, humeur) avec position, taille, priorite
-- **ContextEngine**: Moteur de calcul du contexte semantique de la phrase en cours
-- **BubbleLayoutManager**: Algorithme d'auto-arrangement qui positionne les bulles sans superposition
-- **FrequencyModel**: Modele statistique de frequence des lettres/mots (bigrammes, trigrammes)
-
-## Architecture de Rendu & Threads
-
-### Modele 3 threads
-
-```
-Thread UI (Main)          Thread Render (SurfaceView)     Thread Compute
-┌──────────────────┐     ┌──────────────────────────┐    ┌──────────────────┐
-│ Touch events     │────>│ Canvas.drawCircle/Path   │    │ FastText lookup  │
-│ Gesture detection│     │ Anti-alias rendering     │    │ ACP/eigenvectors │
-│ Input dispatch   │     │ Animation interpolation  │    │ Bubble positions │
-│                  │     │ 60fps render loop        │<───│ Layout solving   │
-└──────────────────┘     └──────────────────────────┘    └──────────────────┘
-```
-
-- **Thread UI** : Capture des touch events, detection des gestes (tap, swipe, multi-pinch). Ne fait AUCUN calcul lourd.
-- **Thread Render** : SurfaceView avec boucle de rendu dediee. Dessine les bulles, anneaux, animations a 60fps. Lit les positions calculees par le thread Compute via un buffer thread-safe (double-buffering ou AtomicReference).
-- **Thread Compute** : Calculs FastText (lookup vecteurs, k-NN), ACP/decomposition eigen, algorithme d'auto-arrangement. Publie les resultats dans le buffer partage. Utilise Eigen C++ via JNI pour les operations matricielles critiques.
-
-### Choix techniques
-
-- **SurfaceView** plutot que View/Canvas classique : rendu sur thread dedie, pas de contention avec le UI thread
-- **Eigen C++ via JNI** : Bibliotheque C++ header-only pour l'algebre lineaire (ACP, SVD, eigendecomposition). Performance native, ~10x plus rapide que Java pour les matrices denses
-- **Double-buffering** : Le thread Compute ecrit dans un buffer "back", le thread Render lit le buffer "front". Swap atomique quand le Compute a fini un cycle
-
-## Approche Progressive de Qualification *(mandatory)*
-
-L'implementation suit une approche en 4 phases incrementales. Chaque phase DOIT atteindre ses criteres de performance AVANT de passer a la suivante. Cela permet d'identifier et resoudre les goulots d'etranglement au plus tot.
-
-### Phase 0 : Rendu Statique (Benchmark de base)
-
-**Objectif** : Valider que le moteur de rendu SurfaceView peut dessiner N bulles a 60fps sans aucun calcul dynamique.
-
-**Implementation** :
-- Positions des bulles codees en dur (hardcoded) sur 3 anneaux
-- Pas de calcul statistique, pas de FastText, pas d'ACP
-- Bulles de tailles variees avec texte, sur fond colore
-- Animation simple : rotation lente des anneaux (pour valider le refresh rate)
-
-**Criteres de passage** :
-- 30 bulles sur 3 anneaux : rendu constant a 60fps (mesuree via Choreographer)
-- Temps de frame < 12ms (marge de 4ms pour le calcul futur)
-- Pas de GC pause visible dans les logs (zero allocation dans la boucle de rendu)
-- Test sur device cible (Snapdragon 855 / OnePlus 7 Pro)
-
-**Livrables** : `ConcentricBenchmarkView.kt` + rapport de performance
-
-### Phase 1 : Layout Dynamique (Auto-arrangement)
-
-**Objectif** : Valider l'algorithme d'auto-arrangement des bulles en temps reel, toujours sans calcul semantique.
-
-**Implementation** :
-- Bulles avec texte aleatoire, ajoutees/retirees dynamiquement
-- Algorithme BubbleLayoutManager : placement sans superposition avec contrainte d'anneau
-- Animations de repositionnement (spring physics ou interpolation lineaire)
-- Test de stress : ajout de 10 bulles/seconde pendant 5 secondes
-
-**Criteres de passage** :
-- Zero superposition mesuree automatiquement (test unitaire + visuel)
-- Repositionnement de 20 bulles en < 8ms (budget restant pour le rendu)
-- Animation fluide (pas de saut, pas de teleportation)
-- Stabilite : les bulles convergent vers une position stable en < 300ms
-
-**Livrables** : `BubbleLayoutManager.kt` + tests unitaires anti-occlusion
-
-### Phase 2 : Calcul Asynchrone (FastText + Prediction)
-
-**Objectif** : Integrer le calcul semantique FastText et les bigrammes/trigrammes sur le thread Compute, en validant que le pipeline async ne degrade pas le rendu.
-
-**Implementation** :
-- Chargement des vecteurs FastText compresses (~50MB) au demarrage
-- Lookup k-NN pour les mots proches (anneau 2-3) sur thread Compute
-- Bigrammes/trigrammes pour les lettres probables (anneau 1) sur thread Compute
-- Double-buffering : le Render thread ne bloque JAMAIS en attente du Compute
-
-**Criteres de passage** :
-- Chargement FastText < 2s au cold start
-- Lookup k-NN (10 voisins parmi 200k mots) < 5ms
-- Le thread Render maintient 60fps meme si le Compute est en retard (affiche les anciennes positions)
-- Latence input-to-display < 50ms (entre le touch et la mise a jour des bulles)
-
-**Livrables** : `FastTextEngine.kt` + `FrequencyModel.kt` + metriques de latence
-
-### Phase 3 : Rotation Multi-Pinch (ACP temps reel)
-
-**Objectif** : Valider le calcul ACP/eigendecomposition en temps reel lors du geste multi-pinch, via Eigen C++ / JNI.
-
-**Implementation** :
-- Detection du geste multi-pinch (2 doigts, rotation)
-- Extraction de la sous-matrice de covariance pour les K mots voisins
-- Decomposition en valeurs/vecteurs propres via Eigen (JNI)
-- Projection 2D selon les 2 premiers axes principaux
-- Rotation de la projection en fonction de l'angle du geste
-- Mise a jour des positions des bulles selon la nouvelle projection
-
-**Criteres de passage** :
-- ACP sur matrice 50x300 (50 mots, vecteurs 300D) < 10ms via Eigen/JNI
-- Rotation continue (pendant le geste) a 60fps
-- Les bulles se repositionnent de facon fluide selon la rotation
-- Les axes semantiques reveles sont coherents (validation manuelle)
-
-**Livrables** : `libconcentricnative.so` (Eigen JNI) + `SemanticRotationEngine.kt` + demo interactive
-
-### Phase 4 (Optionnelle) : Gemma 3 Nano (Concepts abstraits)
-
-**Objectif** : Integrer Gemma 3 Nano via AI Edge SDK pour les anneaux 4-5, si les performances le permettent.
-
-**Criteres de passage** :
-- Inference Gemma 3 Nano < 200ms par requete (acceptable car anneaux 4-5 sont secondaires)
-- Le modele tient en memoire avec FastText (budget total < 500MB RAM)
-- Pas de degradation du rendu des anneaux 1-3
-
-## Architecture UX : Deux Modes avec Transparence Progressive
-
-### Constat fondamental (issu des tests Phase 2b)
-
-Placer des lettres sur des cercles concentriques a des positions angulaires arbitraires ne permet pas a l'utilisateur de localiser efficacement la prochaine lettre. La projection ACP (eigenvalues/eigenvectors) n'a de sens que pour des unites semantiques (mots, concepts), pas pour des lettres individuelles.
-
-**Separation des responsabilites** :
-- **Saisie mecanique** (lettre par lettre) → le clavier AZERTY existant, optimise pour la localisation spatiale des lettres
-- **Exploration semantique** (mots, concepts, associations) → projection ACP 2D libre, sans contrainte de cercles
-
-### Mode 1 : Clavier de saisie (mode par defaut)
-
-Le clavier AZERTY/SwipeKeyboard classique d'Urik, avec sa barre de suggestions existante (dictionnaire, auto-completion). C'est le mode actif au demarrage et pour toute saisie lettre par lettre.
-
-### Mode 2 : Graphe semantique (exploration)
-
-Un graphe 2D de mots/concepts projetes par ACP sur les 2 axes principaux (eigenvectors tries par eigenvalue decroissante). Les mots sont places librement dans l'espace 2D selon leurs coordonnees dans l'espace semantique projete - PAS sur des cercles fixes.
-
-**Proprietes du graphe semantique** :
-- La distance entre deux mots reflète leur proximite semantique
-- Les axes portent le maximum de variance (information correlee)
-- Multi-pinch rotation : pivoter a 2 doigts pour reveler d'autres dimensions semantiques
-- Les mots proches du centre ont la plus forte correlation avec le contexte actuel
-
-### Transition : Transparence progressive (cross-fade)
-
-La transition entre les deux modes se fait par un cross-fade progressif (~400ms) :
-
-```
-Mode Clavier (opacite 100%)
-     │
-     │ declencheur: validation d'un mot complet (espace ou selection suggestion)
-     │              - mot valide du dictionnaire + espace
-     │              - mot inconnu accepte par espace (confirmation spell)
-     │              - selection d'une suggestion dans la barre
-     │
-     ▼ cross-fade 400ms (DecelerateInterpolator)
-     │  - clavier (keyboardView.alpha): 100% → 0%
-     │  - graphe (SemanticGraphOverlay.alpha):  0% → 100%
-     │
-Mode Graphe Semantique (opacite 100%)
-     │
-     │ auto-dismiss: 2 secondes sans interaction → retour automatique
-     │ (le timer se reset a chaque ACTION_DOWN sur le graphe)
-     │
-     │ retour explicite:
-     │   - tap sur un mot du graphe → insertion + retour
-     │   - swipe down (>80dp) → annulation, retour sans insertion
-     │
-     ▼ cross-fade 400ms inverse
-     │
-Mode Clavier (opacite 100%)
-```
-
-**Declencheurs vers le graphe (implementes)** :
-- Appui sur espace apres un mot valide (dictionnaire ou mot appris)
-- Appui sur espace pour confirmer un mot inconnu (etat AWAITING_CONFIRMATION → learnWord + graphe)
-- Selection d'une suggestion dans la barre de suggestions
-- Le mot valide/confirme devient le "mot ancre" du graphe semantique
-
-**Retour au clavier** :
-- Tap sur un mot du graphe → le mot est insere dans le champ de saisie + espace, retour au clavier
-- Swipe vers le bas (>80dp) → annulation, retour au clavier sans insertion
-- Auto-dismiss apres 2 secondes sans interaction tactile (timer resetable)
-
-### Phase 0 bis : Overlay Graphe Semantique + Cross-Fade (VALIDEE)
-
-**Objectif** : Valider la superposition technique overlay transparent + cross-fade fluide entre le clavier AZERTY et le graphe semantique, directement dans le vrai clavier.
-
-**Implementation realisee** :
-- `SemanticGraphOverlay.kt` : custom View dans `ui/concentric/`, dessine noeuds mock + lignes + mot ancre central
-- Donnees mock : map mot ancre → 8 noeuds voisins avec positions (x%, y%)
-- Cross-fade via `AnimatorSet` (2 `ValueAnimator` simultanes, 400ms, `DecelerateInterpolator`)
-- Overlay ajoute comme enfant du `SwipeKeyboardView` (FrameLayout), meme pattern que `SwipeOverlayView`
-- Detection tap sur noeuds via hit-rect, swipe-down dismiss (>80dp)
-- Auto-dismiss 2s sans interaction (timer `postDelayed`, reset sur `ACTION_DOWN`)
-- Declenchement : espace (mot valide + mot inconnu confirme) et selection suggestion
-- Logs `SemGraph.*` pour debug ADB
-
-**Criteres valides** :
-- Cross-fade fluide sans saccade (60fps pendant la transition)
-- Le graphe apparait apres validation d'un mot (espace / suggestion / confirmation spell)
-- Le clavier est invisible quand le graphe est affiche (alpha = 0)
-- Le graphe est invisible quand le clavier est actif (GONE)
-- Tap sur un noeud detecte correctement → insertion mot + retour clavier
-- Swipe down → retour clavier sans insertion
-- Auto-dismiss apres 2s d'inactivite
-- Retour au clavier restaure l'etat complet
-
----
-
-## Architecture Dictionnaire & Apprentissage Contextuel
-
-### Stockage actuel des mots appris (Room/SQLite)
-
-Le dictionnaire utilisateur est deja stocke dans une **BDD SQLite locale via Room** :
-
-```
-Table: learned_words
-├── id (PK, autoGenerate)
-├── word (forme originale, casing preserve)
-├── word_normalized (NFC + normalisation langue)
-├── language_tag (fr, en, etc.)
-├── frequency (incremente a chaque usage)
-├── source (USER_TYPED, SWIPE_LEARNED, USER_SELECTED, AUTO_CORRECTED, IMPORTED)
-├── character_count (grapheme clusters)
-├── created_at (timestamp creation)
-└── last_used (timestamp dernier usage)
-
-Index: idx_exact_lookup (language_tag, word_normalized) UNIQUE
-Index: idx_frequency_recent (language_tag, frequency, last_used)
-Index: idx_cleanup (frequency, last_used)
-
-Table FTS4: learned_words_fts (content sync avec learned_words)
-└── Permet prefix matching et recherche full-text
-```
-
-**Moteur d'apprentissage** : `WordLearningEngine.kt` (Singleton Hilt)
-- Cache en memoire (`ConcurrentHashMap`) par langue
-- Mutex pour thread-safety des ecritures
-- Validation : longueur min/max, caracteres valides
-- Fuzzy search : edit distance <= 2 sur les mots frequents
-- Cooldown exponential en cas d'erreurs SQLite
-
-**Dictionnaire systeme** : `SpellCheckManager` utilise SymSpell (dictionnaire statique pre-charge) pour la validation orthographique. Les mots appris par l'utilisateur sont ajoutes au cache spell pour etre reconnus comme valides.
-
-### Vision : Historique conversationnel local (Phase future)
-
-**Objectif** : Permettre au graphe ACP de s'appuyer sur les habitudes de saisie reelles de l'utilisateur, en plus des proximites semantiques statiques (FastText). L'historique permet de ponderer les noeuds du graphe par la frequence d'usage contextuel de l'utilisateur.
-
-**Table proposee** :
-
-```
-Table: conversation_context (nouvelle)
-├── id (PK, autoGenerate)
-├── session_id (UUID, identifie une session de saisie)
-├── word (mot saisi)
-├── word_normalized
-├── preceding_word (mot precedent, pour bigrammes utilisateur)
-├── language_tag
-├── app_package (optionnel, contexte applicatif : messaging, email, notes...)
-├── timestamp
-└── input_method (typed, swiped, selected, semantic_graph)
-```
-
-**Exploitation pour le graphe ACP** :
-- Les bigrammes utilisateur (word, preceding_word) permettent de ponderer les aretes du graphe
-- La frequence d'usage par contexte applicatif (messaging vs email) permet d'adapter les suggestions
-- Le `input_method = semantic_graph` trace quels mots l'utilisateur a effectivement selectionnes via le graphe
-- L'historique alimente un modele de co-occurrence utilisateur qui se superpose aux vecteurs FastText statiques
-
-**Privacy et parametrage** :
-- **Aucune permission Android supplementaire requise** : l'historique ne capture que les mots saisis via le clavier Urik (InputMethodService a deja acces au texte saisi)
-- **Option parametrable dans les Settings** : `conversationHistoryEnabled` (defaut: true)
-- **Retention parametrable** : duree de retention (7j, 30j, 90j, illimite), nettoyage automatique via `cleanupOldHistory(cutoff)`
-- **Purge manuelle** : bouton "Effacer l'historique" dans les parametres
-- **Exclusion champs sensibles** : desactive automatiquement pour `EditorInfo.TYPE_TEXT_VARIATION_PASSWORD`, `TYPE_TEXT_VARIATION_VISIBLE_PASSWORD`, `TYPE_TEXT_VARIATION_WEB_PASSWORD`
-- **Pas de stockage du texte complet** : seuls les mots individuels et leurs paires (bigrammes) sont stockes, pas les phrases entieres
-
-**Phases d'implementation** :
-1. **Phase A** : Table `conversation_context` + enregistrement passif des mots saisis (pas d'exploitation)
-2. **Phase B** : Ponderation des noeuds du graphe par frequence utilisateur (bigrammes)
-3. **Phase C** : Adaptation contextuelle par app (messaging vs notes vs email)
-4. **Phase D** : Modele de co-occurrence temps reel qui influence la projection ACP
-
----
-
-### Extensibilite AR/XR (future-proofing)
-
-L'architecture est concue pour etre extensible de 2D a 3D :
-
-- **2D actuel** : projection sur les 2 premiers eigenvectors (ecran tactile classique)
-- **3D futur** : projection sur les 3 premiers eigenvectors (Android XR SDK / ARCore)
-- Le multi-pinch devient un multi-pinch 3D (rotation dans l'espace 3D)
-- Les mots deviennent des spheres positionnees dans l'espace 3D
-- Le passage de 2 a 3 eigenvectors est un changement de parametre, pas d'architecture
-
-**SDK cibles** :
-- Android XR SDK (Galaxy XR, Project Moohan)
-- ARCore (smartphones compatibles)
-- La structure ComputeEngine produit deja des vecteurs N-dimensionnels, la projection 2D→3D est une operation terminale
-
-## Phase 1 : Moteur FastText + ACP Bilingue + Neologismes
-
-### Architecture
-
-Phase 1 remplace les donnees mock du `SemanticGraphOverlay` par de vrais embeddings FastText projetes en 2D via ACP (PCA), avec support bilingue francais/anglais et generation de neologismes par multi-touch.
+**Les eigenvectors sont des questions** : PC1 pour "manger" pourrait etre l'axe `cuisine domestique ↔ gastronomie`. PC2 pourrait etre `besoin vital ↔ plaisir social`. Chaque paire d'eigenvectors revele une dimension de sens.
 
 ### Format `.uvec` (Urik VECtor)
 
@@ -479,229 +205,214 @@ Vocabulary section :
 
 Vector section :
   - float16 contigus, chaque mot = dimension entrees
-  - Vecteurs L2-normalises a l'export
+  - Vecteurs L2-normalises a l'export → cosinus = dot product
 ```
 
-Conversion hors-ligne via `tools/convert_fasttext.py` (Python, pas dans l'APK).
+### Stores categoriels (POS-split)
+
+```
+fasttext_{lang}.uvec          → store complet (60k mots)
+fasttext_{lang}_nouns.uvec    → noms + noms propres (~52k)
+fasttext_{lang}_verbs.uvec    → verbes (~8k)
+```
+
+Split par heuristique morphologique (`--split-uvec`) ou par spaCy (`--pos-split`).
+Vecteurs pre-alignes MUSE au chargement pour k-NN bilingue en dot product direct.
+
+---
+
+## Architecture technique
 
 ### Moteur FastText (`ml/FastTextEngine.kt`)
 
-- Chargement paresseux des `.uvec` au premier affichage du graphe semantique
-- Recherche k-NN par force brute sur vecteurs pre-normalises (cosinus = dot product)
-- 60k mots x 100 dims ~ 1.5ms/langue sur Snapdragon 855
-- Support MUSE alignment matrices pour espace vectoriel bilingue commun
-- Gestion pression memoire via `onTrimMemory()` : decharge langue secondaire
+- Chargement paresseux et parallele des `.uvec` (4 stores bilingues en ~800ms)
+- Pre-alignement MUSE au chargement (dot product direct sans multiplication matricielle runtime)
+- Recherche k-NN bilingue : cherche l'ancre dans les 2 langues automatiquement
+- Vecteur ancre : fallback 6 niveaux (2 langues × 3 categories)
+- Gestion pression memoire : decharge verbes, puis noms secondaires
 
 ### Projecteur ACP (`ml/PcaProjector.kt`)
 
-- Projection N vecteurs (8-20 voisins, 100D) en 2D via decomposition en composantes principales
-- Power iteration pour les 2 eigenvectors principaux (~25 iterations, <5ms)
-- Normalisation vers [0.1, 0.9] avec ancre au centre (0.5, 0.45)
-- Rotation optionnelle pour multi-pinch future
+- Power iteration (25 iters) pour les 2 eigenvectors principaux (~1-5ms)
+- `project()` : projection single-graph [0.1, 0.9]
+- `projectToRegion()` : projection dans une bande d'ecran arbitraire
+- `projectTrigram()` : 3 ACP independantes pour S-V-O
+- Rotation multi-pinch : re-projection sur paires d'eigenvectors secondaires
 
-### Mode Learning bilingue
+### Pipeline de conversion (`tools/convert_fasttext.py`)
 
-- Parametre `bilingualGraphEnabled` dans `KeyboardSettings` (defaut: false)
-- Monolingual (defaut) : graphe dans la langue courante uniquement
-- Bilingual : `findKNearestBilingual()` cherche dans FR+EN via MUSE alignment
-- Noeuds colores par langue : FR (bleu `semanticNodeFrench`), EN (rouge `semanticNodeEnglish`)
-- Legende en bas du graphe avec pastilles colorees
+| Mode | Commande | Description |
+|------|----------|-------------|
+| Standard | `--input .vec --output .uvec` | Conversion .vec → .uvec avec PCA truncation |
+| MUSE | `--convert-muse --input .pth` | Matrice alignement → float16 binary |
+| POS spaCy | `--pos-split --lang fr` | Split par POS via spaCy (requiert spaCy) |
+| POS morpho | `--split-uvec --lang fr` | Split par heuristique morphologique (zero dep) |
 
-### Generation de neologismes par multi-touch
+### Architecture threads
 
-- Detection multi-touch : 2 doigts sur 2 noeuds de langues differentes
-- Disambiguation rotation vs neologisme : angle < 5 degres = neologisme, >= 5 = rotation PCA
-- 3 strategies : Portmanteau (chevauchement), Syllable Blend, Morpheme Mix
-- Score de naturalite : penalise clusters consonnes >3, favorise alternance voyelle-consonne
-- `WordSource.NEOLOGISM` ajoute pour l'apprentissage des mots generes
+```
+Thread UI (Main)              Thread Compute (Dispatchers.Default)
+┌──────────────────────┐     ┌──────────────────────────────────┐
+│ Touch events         │     │ FastText k-NN (bilingue)         │
+│ Gesture detection    │     │ ACP projection (power iteration) │
+│ Overlay rendering    │────>│ Morpho split / POS classification│
+│ Cross-fade animation │<────│ Trigram S-V-O orchestration      │
+│ 60fps Canvas draw    │     │ Axe semantique interpretation    │
+└──────────────────────┘     └──────────────────────────────────┘
+                                        │
+                              Thread IO (Dispatchers.IO)
+                             ┌──────────────────────────┐
+                             │ Chargement .uvec assets   │
+                             │ Pre-alignement MUSE       │
+                             │ Room/SQLite (historique)   │
+                             └──────────────────────────┘
+```
 
-### Fichiers crees
-
-| Fichier | Role |
-|---------|------|
-| `ml/VectorMath.kt` | Ops vectorielles sans allocation |
-| `ml/FastTextEngine.kt` | Chargement .uvec + k-NN cosinus |
-| `ml/PcaProjector.kt` | Projection ACP 2D + rotation |
-| `ml/NeologismGenerator.kt` | Fusion FR+EN → neologisme |
-| `tools/convert_fasttext.py` | Conversion .vec → .uvec (hors-ligne) |
-| `assets/vectors/*.uvec` | Vecteurs FastText (placeholder stubs) |
-| `assets/vectors/*.bin` | Matrices alignement MUSE (identity stubs) |
-
-### Fichiers modifies
-
-| Fichier | Changement |
-|---------|------------|
-| `SemanticGraphOverlay.kt` | Mock supprime, languageTag, rendu bilingue, multi-touch |
-| `ThemeColors.kt` | +2 couleurs : semanticNodeFrench, semanticNodeEnglish |
-| `KeyboardSettings.kt` | +1 champ : bilingualGraphEnabled |
-| `SettingsRepository.kt` | +1 pref key + update method |
-| `LearnedWord.kt` | +1 valeur NEOLOGISM dans WordSource |
-| `KeyboardModule.kt` | +2 providers DI (FastTextEngine, NeologismGenerator) |
-| `UrikInputMethodService.kt` | triggerSemanticGraph avec vrai FastText + PCA |
-| `SwipeKeyboardView.kt` | +setSemanticGraphNodes, +setOnNeologismRequestedListener |
+Regle absolue : **le Thread UI ne fait AUCUN calcul vectoriel**. Tout est sur Default/IO.
 
 ---
 
-## Phase 2 : Trigram S-V-O — Graphe semantique tri-zone (EN COURS)
+## Phases d'implementation
 
-### Vision
+### Phase 0 : Overlay + Cross-Fade (VALIDEE)
 
-Extension du graphe semantique mono-ancre vers un mode **trigramme Sujet-Verbe-Objet** (S-V-O). Le graphe est divise en 3 zones horizontales independantes, chacune projetee par PCA dans sa propre bande d'ecran. Chaque zone affiche les k plus proches voisins semantiques dans une categorie grammaticale specifique (noms pour S/O, verbes pour V). Fallback automatique vers le mode single-graph quand les stores categoriels ne sont pas disponibles.
+Superposition technique overlay transparent + cross-fade fluide entre clavier et graphe.
+Donnees mock, validation du pipeline d'affichage.
 
-### Pipeline POS-split (`convert_fasttext.py`)
+### Phase 1 : Moteur FastText + ACP + Bilingue (VALIDEE)
 
-```
-cc.{lang}.300.vec  ──►  convert_fasttext.py --pos-split --lang {lang}
-                              │
-                              ├── fasttext_{lang}_nouns.uvec   (noms + noms propres)
-                              └── fasttext_{lang}_verbs.uvec   (verbes)
-```
+Vrais embeddings FastText projetes en 2D via ACP. Support bilingue FR/EN via MUSE.
+Neologismes par multi-touch. Format `.uvec`. Graphe single-anchor.
 
-- **POS tagging** : spaCy (`fr_core_news_sm` / `en_core_web_sm`), batch processing par lots de 1000
-- **Ambiguite** : les mots ambigus (nom dans un contexte, verbe dans un autre) sont dupliques dans les deux fichiers
-- **Format** : `.uvec` identique au format existant (float16, L2-normalise, trie alphabetiquement)
-- **Alignement MUSE** : matrice `align_{lang}.bin` partagee entre stores noun/verb d'une meme langue
+### Phase 2 : Trigram S-V-O (VALIDEE — debug en cours)
 
-### Stores categoriels (`FastTextEngine.kt`)
+Graphe tri-zone Sujet-Verbe-Objet. POS-split morphologique. Pre-alignement MUSE.
+Recherche k-NN bilingue avec fallback multi-langue. Calcul off-thread (Dispatchers.Default).
 
-- `WordCategory` enum : `NOUN`, `VERB`
-- Cle de store : `"{lang}_{CATEGORY}"` (ex: `fr_NOUN`, `en_VERB`)
-- `loadTrigramStores(tag1, tag2?)` : chargement parallele (4 async jobs max en bilingue)
-- `findKNearest(anchor, tag, category, k)` : k-NN monolingue par categorie
-- `findKNearestBilingual(anchor, lang1, lang2, category, k)` : k-NN bilingue par categorie avec vecteurs alignes MUSE
-- `getAlignedVector(word, tag, category)` / `getVector(word, tag, category)` : acces aux vecteurs par categorie
-- `isCategoryLoaded(tag, category)` : test de disponibilite
-- `onTrimMemory()` ameliore : decharge les verbes en premier (plus petits, moins critiques), puis les noms des langues secondaires
+**Bugs resolus pendant le debug 2026-02-09 :**
+- FileNotFoundException sur stores categoriels manquants → fallback gracieux vers single-graph
+- ANR cause par k-NN sur main thread → migration vers Dispatchers.Default
+- Zone VERB vide → fix recherche ancre bilingue (cherche dans les 2 langues)
+- Performance 20s → <100ms par pre-alignement MUSE au chargement
 
-### Projection PCA tri-zone (`PcaProjector.kt`)
+### Phase 3 : Barre de suggestions enrichie (A FAIRE)
 
-- `TrigramZone` enum : `SUBJECT`, `VERB`, `OBJECT`
-- `TrigramProjection` data class : zone + projections 2D + anchorWord
-- `projectTrigram(...)` : 3 PCA independantes, chacune dans sa propre bande horizontale
-- `projectToRegion(...)` : methode interne factorisee (utilisee aussi par `project()` en mode single)
+**Objectif** : Remplacer la barre de 3 suggestions frequentielles par un gradient semantique.
 
-**Layout des zones :**
+**Implementation** :
+- Slot 1 : suggestion frequentielle existante (pas de changement)
+- Slot 2 : voisin FastText de distance semantique moyenne, filtre par coherence contextuelle
+- Slot 3 : voisin FastText distant mais thematiquement coherent
+- Calcul async sur Dispatchers.Default, affichage non bloquant
 
-| Zone    | xMin  | xMax  | anchorX | anchorY |
-|---------|-------|-------|---------|---------|
-| SUBJECT | 0.05  | 0.30  | 0.175   | 0.45    |
-| VERB    | 0.35  | 0.65  | 0.50    | 0.45    |
-| OBJECT  | 0.70  | 0.95  | 0.825   | 0.45    |
+**Criteres de passage** :
+- Les 3 suggestions sont visuellement distinctes (opacite decroissante gauche→droite)
+- Le slot 1 reste aussi rapide qu'avant (pas de regression de latence)
+- Les slots 2-3 se remplissent en <50ms apres le slot 1
 
-### Rendu graphique (`SemanticGraphOverlay.kt`)
+### Phase 4 : Eventail semantique + Axes comme questions (A FAIRE)
 
-- **Mode dual** : `isTrigramMode` flag — l'overlay gere les deux modes (single + trigram)
-- `TrigramGraphData` : data class contenant 3 ancres + 3 listes de `GraphNode`
-- `setTrigramNodes(data)` : point d'entree pour activer le mode trigram
-- `drawTrigramMode()` : rendu Canvas avec :
-  - 2 separateurs verticaux (33% et 66% de la largeur)
-  - Labels de zone en haut : "SUJET", "ACTION", "OBJET"
-  - Animation magnetique par zone (ease-out-expo, 3s) identique au mode single
-  - Vibration residuelle decroissante
-  - Rotation par zone autour du centre de chaque zone
-- `drawDnaSpiralTrigram()` : spirale ADN/ARN decalee a l'extreme gauche (4% de la largeur) pour eviter le chevauchement avec la zone SUBJECT
-- `getTrigramZoneIndex(flatIndex)` : mapping index plat → index de zone (0=S, 1=V, 2=O)
-- `onTrigramZoneWordSelected` : callback avec (word, zoneIndex)
-- Tailles reduites : ancres 28dp (vs 36dp single), noeuds 20dp (vs 24dp single)
-- `resetState()` : nettoyage complet du mode trigram
+**Objectif** : Pull-up sur la barre pour reveler un arc de 8-12 mots avec interpretation de l'axe ACP.
 
-### Integration IME (`UrikInputMethodService.kt`)
+**Implementation** :
+- Detection pull-up sur la barre de suggestions (seuil 40dp)
+- Projection ACP en demi-cercle (180 degres) au-dessus de la barre
+- Interpretation automatique de PC1 : extraction des 2 mots extremes sur l'axe comme labels
+- Affichage de l'axe : `← mot_pole_A ... mot_pole_B →`
+- Multi-pinch rotation → changement d'axe avec animation de transition
+- Auto-dismiss sur frappe ou timeout 3s
 
-- `triggerTrigramGraph(completedWord)` : remplace `triggerSemanticGraph()` comme point d'entree principal
-- **Heuristique d'ancrage** (version actuelle) : les 3 ancres = mot complete (fallback uniforme — a ameliorer)
-- **k-NN par zone** : k=6 par zone (~18 noeuds total en bilingue)
-- **Fallback** : si aucun voisin trouve dans les stores categoriels → retour au mode single-graph via `triggerSemanticGraph()`
-- `getTrigramAnchorVector()` : recuperation du vecteur ancre avec 3 niveaux de fallback :
-  1. Store categoriel demande (NOUN ou VERB)
-  2. Store categoriel oppose
-  3. Store legacy (langue complete)
-- Points d'appel : validation de mot (commitText), selection de suggestion, double-tap espace
+**Criteres de passage** :
+- L'eventail s'ouvre en <200ms apres le pull-up
+- L'axe semantique affiche est pertinent (validation manuelle sur 20 mots ancre)
+- Le clavier reste utilisable sous l'eventail (tap lettre → ferme eventail + saisit lettre)
+- La rotation multi-pinch revele un axe sementiquement different de PC1
 
-### Bridge (`SwipeKeyboardView.kt`)
+### Phase 5 : Declenchement intelligent (A FAIRE)
 
-- `setSemanticGraphTrigramNodes(data)` : passe les donnees trigram a l'overlay
-- `setOnTrigramZoneWordSelectedListener(listener)` : enregistre le callback de selection par zone
+**Objectif** : Detecter automatiquement le mode cognitif de l'utilisateur.
 
-### Fichiers modifies (Phase 2)
+**Implementation** :
+- Mesure du debit de frappe (mots/minute) sur fenetre glissante de 10s
+- Seuil mode fluide : >40 mots/min → desactive eventail automatique
+- Seuil mode reflexif : pause >1.5s apres validation → ouvre eventail automatiquement
+- Exclusion champs sensibles (TYPE_TEXT_VARIATION_PASSWORD)
 
-| Fichier | Lignes ajoutees | Role |
-|---------|----------------|------|
-| `tools/convert_fasttext.py` | +127 | Pipeline POS-split via spaCy |
-| `ml/FastTextEngine.kt` | +153 | API categorielle (stores, k-NN, vecteurs) |
-| `ml/PcaProjector.kt` | +131 | Projection trigram 3 zones |
-| `ui/concentric/SemanticGraphOverlay.kt` | +346 | Rendu Canvas trigram + DNA spiral adapte |
-| `UrikInputMethodService.kt` | +188 | Orchestration trigram + fallbacks |
-| `ui/keyboard/components/SwipeKeyboardView.kt` | +12 | Bridge methodes trigram |
+### Phase 6 : Neologisme bilingue en mode trigram (A FAIRE)
 
-### User Stories Phase 2
+**Objectif** : Permettre la creation de neologismes multilingues dans le graphe S-V-O.
 
-#### US-P2-1 — Graphe semantique S-V-O tri-zone (P1) — IMPLEMENTE
-
-L'utilisateur tape un mot sur le clavier eX²Libris. Apres validation, un graphe semantique apparait en overlay, divise en 3 zones horizontales : SUJET (noms a gauche), ACTION (verbes au centre), OBJET (noms a droite). Chaque zone montre les k plus proches voisins semantiques de l'ancre dans sa categorie grammaticale.
-
-**Acceptance Scenarios :**
-
-1. **Given** l'utilisateur valide un mot, **When** les stores categoriels (noun/verb) sont charges, **Then** le graphe trigram s'affiche avec 3 zones separees contenant chacune ~6 noeuds
-2. **Given** les stores categoriels ne sont pas disponibles, **When** l'utilisateur valide un mot, **Then** le systeme retombe sur le graphe single-anchor existant
-3. **Given** le mode bilingue est active, **When** le graphe trigram s'affiche, **Then** chaque zone contient des mots des 2 langues, differencies par couleur
-
-#### US-P2-2 — Navigation gestuelle par zone (P1) — IMPLEMENTE
-
-L'utilisateur peut interagir avec chaque zone du graphe trigram : taper un noeud pour le selectionner (avec flash visuel), ou effectuer une rotation multi-pinch qui s'applique autour du centre de chaque zone.
-
-**Acceptance Scenarios :**
-
-1. **Given** le graphe trigram est affiche, **When** l'utilisateur tape un noeud, **Then** un flash de selection s'affiche et les callbacks `onWordSelected` et `onTrigramZoneWordSelected` sont invoques
-2. **Given** le graphe trigram est affiche, **When** l'utilisateur effectue un geste de rotation, **Then** la rotation s'applique independamment autour du centre de chaque zone
-
-#### US-P2-3 — Spirale ADN contextuelle adaptee (P2) — IMPLEMENTE
-
-La spirale ADN/ARN (historique de la phrase en cours) est repositionnee a l'extreme gauche (4% de la largeur) en mode trigram pour ne pas chevaucher la zone SUBJECT.
-
-#### US-P2-4 — Pipeline de generation POS-split (P1) — IMPLEMENTE
-
-`convert_fasttext.py` supporte un mode `--pos-split --lang {fr|en}` qui genere 2 fichiers `.uvec` separes (noms et verbes) a partir d'un fichier FastText source, via spaCy POS tagging.
-
-**Acceptance Scenarios :**
-
-1. **Given** un fichier FastText `.vec` source, **When** on execute `python convert_fasttext.py --input cc.fr.300.vec --pos-split --lang fr --dim 100`, **Then** 2 fichiers sont generes : `fasttext_fr_nouns.uvec` et `fasttext_fr_verbs.uvec`
-2. **Given** un mot ambigu (ex: "marche" = nom et verbe), **When** le POS split est effectue, **Then** le mot apparait dans les deux fichiers
-
-#### US-P2-5 — Heuristique d'ancrage contextuel S-V-O (P2) — A FAIRE
-
-Actuellement les 3 ancres sont le meme mot (fallback uniforme). L'heuristique cible :
-- VERB : le mot complete (ou dernier verbe dans le contexte de la phrase)
-- SUBJECT : dernier nom avant le verbe
-- OBJECT : mot complete si c'est un nom en position post-verbale
-
-#### US-P2-6 — Interaction zone-specifique (P3) — A FAIRE
-
-Quand l'utilisateur tape un mot dans une zone specifique, seule cette zone est recalculee avec le nouveau mot comme ancre, les 2 autres zones conservent leur etat. Permet une exploration independante S, V, et O.
-
-### Edge Cases Phase 2
-
-- **Store categoriel manquant** : fallback vers le mode single-graph (`triggerSemanticGraph`)
-- **Mot absent de tous les stores** : aucun graphe affiche (log + skip)
-- **Vecteur ancre introuvable dans la categorie demandee** : fallback categorie opposee → store legacy
-- **Memory pressure** : verbes decharges en premier, puis noms des langues secondaires
-- **Mot < 2 caracteres** : trigram graph non declenche
-- **Graphe deja visible** : trigram graph non re-declenche (protection anti-doublon)
+**Implementation** :
+- Affichage bilingue dans chaque zone (noeuds FR bleus, EN rouges)
+- Selection de 2 noeuds de langues differentes (multi-touch)
+- Disambiguation : angle rotation < 5° = neologisme, >= 5° = rotation ACP
+- 3 strategies de fusion : Portmanteau, Syllable Blend, Morpheme Mix
+- Score de naturalite : penalise clusters consonnes >3
 
 ---
 
-## Success Criteria *(mandatory)*
+## Architecture Dictionnaire & Apprentissage Contextuel
 
-### Measurable Outcomes
+### Stockage actuel (Room/SQLite)
 
-- **SC-001**: L'utilisateur peut taper un mot de 7 lettres en moins de 10 secondes avec le mode concentrique (apres apprentissage)
-- **SC-002**: Zero superposition de bulles dans 100% des cas testes
-- **SC-003**: Temps de calcul des anneaux < 16ms (compatible 60fps)
-- **SC-004**: Le mot correct apparait dans l'anneau 2 dans 80% des cas apres 3 lettres tapees
-- **SC-005**: Basculement AZERTY <-> Concentrique en < 200ms
-- **SC-006**: Phase 0 validee sur Snapdragon 855 avant tout developpement fonctionnel
-- **SC-007**: Chaque phase de qualification documentee avec rapport de metriques mesure sur device
-- **SC-008**: Le graphe trigram s'affiche en < 50ms apres le k-NN (hors chargement initial des stores)
-- **SC-009**: Les 3 zones sont visuellement distinctes (separateurs + labels SUJET/ACTION/OBJET)
-- **SC-010**: Le fallback single-graph fonctionne sans crash quand les stores categoriels sont absents
-- **SC-011**: Le pipeline POS-split produit des fichiers `.uvec` conformes au format existant
-- **SC-012**: L'animation magnetique trigram est fluide a 60fps sur device cible
+```
+Table: learned_words
+├── word, word_normalized, language_tag
+├── frequency, source, character_count
+├── created_at, last_used
+Index: idx_exact_lookup (language_tag, word_normalized) UNIQUE
+```
+
+### Historique conversationnel local (Phase future)
+
+```
+Table: conversation_context (nouvelle)
+├── session_id, word, preceding_word
+├── language_tag, app_package, timestamp
+├── input_method (typed, swiped, selected, semantic_graph, eventail)
+```
+
+**Exploitation** :
+- Bigrammes utilisateur pour ponderer les aretes du graphe
+- Frequence par app (messaging vs email) pour adapter les suggestions
+- `input_method = eventail` / `semantic_graph` trace les mots choisis via exploration
+- Modele de co-occurrence utilisateur superpose aux vecteurs FastText statiques
+
+**Privacy** : Aucune permission supplementaire. Option parametrable. Retention configurable. Exclusion champs sensibles. Pas de stockage de phrases entieres.
+
+---
+
+## Extensibilite
+
+### AR/XR (future-proofing)
+
+- 2D actuel → 3D via projection sur 3 eigenvectors (Android XR SDK / ARCore)
+- L'eventail devient une sphere explorable en 3D
+- Le multi-pinch devient rotation 3D libre
+- Changement de parametre, pas d'architecture
+
+### Limites de FastText et pistes d'evolution
+
+FastText capture la **proximite distributionnelle** (mots dans les memes contextes). C'est puissant pour les synonymes et champs lexicaux mais limite pour :
+- **Associations metaphoriques** : "glacial" → solitude (connexion poetique inter-domaine)
+- **Pragmatique** : intention de l'utilisateur, registre de langue
+
+**Pistes** :
+- Gemma 3 Nano (AI Edge SDK) pour enrichir les axes avec des interpretations contextuelles
+- Fine-tuning sur des corpus specifiques (poetique, technique, etc.)
+- Modele de co-occurrence utilisateur pour personnaliser les axes
+
+---
+
+## Success Criteria
+
+- **SC-001** : Le clavier ne lag JAMAIS — zero frame drop pendant la frappe swipe, quel que soit le niveau d'exploration actif
+- **SC-002** : La barre enrichie (Niveau 1) affiche 3 suggestions de qualite croissante en <50ms
+- **SC-003** : L'eventail (Niveau 2) s'ouvre en <200ms et affiche un axe semantique pertinent
+- **SC-004** : Le graphe trigram (Niveau 3) affiche 3 zones peuplees en <100ms (hors chargement initial)
+- **SC-005** : L'utilisateur peut passer du Niveau 0 (frappe pure) au Niveau 3 (exploration profonde) et retour en <1s total
+- **SC-006** : Le declenchement intelligent ne montre JAMAIS l'eventail quand l'utilisateur tape a >40 mots/min
+- **SC-007** : L'axe semantique (PC1) affiche est jugé pertinent dans >80% des cas (validation manuelle)
+- **SC-008** : Le mode bilingue affiche FR et EN avec couleurs distinctes dans chaque zone du trigram
+- **SC-009** : Zero donnee transmise hors du device
+- **SC-010** : Chaque phase de qualification documentee avec metriques mesurees sur device cible
