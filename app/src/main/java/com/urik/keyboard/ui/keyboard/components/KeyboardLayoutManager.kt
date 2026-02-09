@@ -937,6 +937,7 @@ class KeyboardLayoutManager(
                 },
             )
 
+            isAllCaps = false
             setTextSize(TypedValue.COMPLEX_UNIT_SP, finalTextSize)
             maxLines = 1
             gravity = Gravity.CENTER

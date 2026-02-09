@@ -72,6 +72,8 @@ class SwipeDetector
             fun onSwipeResults(candidates: List<WordCandidate>)
 
             fun onTap(key: KeyboardKey)
+
+            fun onLetterHighlighted(char: Char, center: PointF)
         }
 
         @Suppress("ktlint:standard:backing-property-naming")
@@ -87,6 +89,7 @@ class SwipeDetector
         private var lastDeltaX = 0f
         private var directionReversals = 0
         private var lastCheckX = 0f
+        private var lastHighlightedChar: Char = '\u0000'
 
         private var currentLocale: ULocale? = null
 
@@ -623,6 +626,35 @@ class SwipeDetector
             if (now - lastUpdateTime >= SwipeDetectionConstants.UI_UPDATE_INTERVAL_MS) {
                 lastUpdateTime = now
                 _swipeListener?.onSwipeUpdate(transformed)
+
+                detectLetterHighlight(transformed)
+            }
+        }
+
+        private fun detectLetterHighlight(point: PointF) {
+            val positions = keyCharacterPositions
+            if (positions.isEmpty()) return
+
+            var closestChar = '\u0000'
+            var closestDist = Float.MAX_VALUE
+            var closestPos = PointF()
+
+            for ((char, keyPos) in positions) {
+                val dx = point.x - keyPos.x
+                val dy = point.y - keyPos.y
+                val dist = sqrt(dx * dx + dy * dy)
+                if (dist < closestDist) {
+                    closestDist = dist
+                    closestChar = char
+                    closestPos = keyPos
+                }
+            }
+
+            if (closestDist < GeometricScoringConstants.KEY_TRAVERSAL_RADIUS * 0.7f &&
+                closestChar != lastHighlightedChar
+            ) {
+                lastHighlightedChar = closestChar
+                _swipeListener?.onLetterHighlighted(closestChar, PointF(closestPos.x, closestPos.y))
             }
         }
 
@@ -1662,6 +1694,7 @@ class SwipeDetector
             directionReversals = 0
             lastCheckX = 0f
             lastUpdateTime = 0L
+            lastHighlightedChar = '\u0000'
         }
 
         /**

@@ -955,8 +955,13 @@ class SwipeKeyboardView
          * Updates suggestion bar with new word candidates.
          *
          */
-        fun updateSuggestions(suggestions: List<String>) {
+        enum class SuggestionMode { FREQUENCY, SEMANTIC }
+
+        private var currentSuggestionMode = SuggestionMode.FREQUENCY
+
+        fun updateSuggestions(suggestions: List<String>, mode: SuggestionMode = SuggestionMode.FREQUENCY) {
             if (isDestroyed) return
+            currentSuggestionMode = mode
             updateSuggestionBarContent(suggestions)
         }
 
@@ -1004,10 +1009,21 @@ class SwipeKeyboardView
 
                 val suggestionTextSize = calculateResponsiveSuggestionTextSize()
                 btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, suggestionTextSize)
-                btn.setTextColor(
-                    themeManager!!
-                        .currentTheme.value.colors.suggestionText,
-                )
+
+                if (currentSuggestionMode == SuggestionMode.SEMANTIC) {
+                    val theme = themeManager!!.currentTheme.value
+                    val warmColor = theme.colors.keyTextAction
+                    val coolColor = theme.colors.keyBorder
+                    val ratio = if (suggestions.size > 1) index.toFloat() / (suggestions.take(3).size - 1).toFloat() else 0f
+                    val blendedColor = blendColors(warmColor, coolColor, ratio)
+                    btn.setTextColor(blendedColor)
+                    btn.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                } else {
+                    btn.setTextColor(
+                        themeManager!!
+                            .currentTheme.value.colors.suggestionText,
+                    )
+                }
 
                 btn.textDirection =
                     if (currentLayout?.isRTL == true) {
@@ -1025,7 +1041,9 @@ class SwipeKeyboardView
                 val verticalPadding = (suggestionTextSize * context.resources.displayMetrics.density * 0.65f).toInt()
                 btn.setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
 
-                btn.typeface = android.graphics.Typeface.DEFAULT
+                if (currentSuggestionMode != SuggestionMode.SEMANTIC) {
+                    btn.typeface = android.graphics.Typeface.DEFAULT
+                }
 
                 btn.setTag(R.id.suggestion_text, suggestion)
                 btn.setOnClickListener(suggestionClickListener)
@@ -1427,7 +1445,10 @@ class SwipeKeyboardView
 
             if (childCount > 1) {
                 for (i in childCount - 2 downTo 0) {
-                    removeViewAt(i)
+                    val child = getChildAt(i)
+                    if (child !== swipeOverlay && child !== semanticGraphOverlay) {
+                        removeViewAt(i)
+                    }
                 }
             }
 
@@ -1436,7 +1457,7 @@ class SwipeKeyboardView
             if (keyboardView is ViewGroup) {
                 addView(
                     keyboardView,
-                    childCount - 1,
+                    0,
                     LayoutParams(
                         LayoutParams.MATCH_PARENT,
                         LayoutParams.WRAP_CONTENT,
@@ -1444,6 +1465,9 @@ class SwipeKeyboardView
                 )
 
                 extractButtonViews(keyboardView)
+
+                swipeOverlay.bringToFront()
+                semanticGraphOverlay.bringToFront()
 
                 suggestionBar =
                     LinearLayout(context).apply {
@@ -1970,6 +1994,14 @@ class SwipeKeyboardView
             return null
         }
 
+        fun startSwipeIdleAnimation() {
+            swipeOverlay.startIdleAnimation()
+        }
+
+        fun stopSwipeIdleAnimation() {
+            swipeOverlay.stopIdleAnimation()
+        }
+
         override fun onSwipeStart(startPoint: PointF) {
             if (isDestroyed) return
             swipeOverlay.startSwipe(startPoint)
@@ -2046,11 +2078,23 @@ class SwipeKeyboardView
             return bestCandidate?.first?.word ?: candidates.first().word
         }
 
+        override fun onLetterHighlighted(char: Char, center: PointF) {
+            if (isDestroyed) return
+            swipeOverlay.highlightLetter(char, center)
+        }
+
         override fun onTap(key: KeyboardKey) {
             if (isDestroyed) return
             keyboardLayoutManager?.triggerHapticFeedback()
 
             onKeyClickListener?.invoke(key)
+        }
+
+        private fun blendColors(color1: Int, color2: Int, ratio: Float): Int {
+            val r = ((color1 shr 16 and 0xFF) * (1 - ratio) + (color2 shr 16 and 0xFF) * ratio).toInt()
+            val g = ((color1 shr 8 and 0xFF) * (1 - ratio) + (color2 shr 8 and 0xFF) * ratio).toInt()
+            val b = ((color1 and 0xFF) * (1 - ratio) + (color2 and 0xFF) * ratio).toInt()
+            return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
 
         private fun clearCollections() {

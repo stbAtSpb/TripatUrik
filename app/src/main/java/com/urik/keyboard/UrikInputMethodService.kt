@@ -181,6 +181,7 @@ class UrikInputMethodService :
     private var serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
     private val observerJobs = mutableListOf<Job>()
 
+    private var semanticEnrichJob: Job? = null
     private var swipeKeyboardView: SwipeKeyboardView? = null
     private var adaptiveContainer: com.urik.keyboard.ui.keyboard.components.AdaptiveKeyboardContainer? = null
     private var keyboardRootContainer: LinearLayout? = null
@@ -680,6 +681,7 @@ class UrikInputMethodService :
                             isShowingBigramPredictions = true
                             pendingSuggestions = displayPredictions
                             swipeKeyboardView?.updateSuggestions(displayPredictions)
+                            scheduleSemanticEnrichment()
                         }
                     }
                 }
@@ -688,7 +690,54 @@ class UrikInputMethodService :
         }
     }
 
+    private fun scheduleSemanticEnrichment() {
+        cancelSemanticEnrichment()
+        val word = lastCommittedWord
+        if (word.isBlank()) return
+
+        semanticEnrichJob = serviceScope.launch {
+            delay(800L)
+            try {
+                val primaryLang = languageManager.currentLanguage.value.split("-").first()
+                val languages = languageManager.activeLanguages.value
+                val secondaryLang = languages.firstOrNull { it != primaryLang }
+
+                if (!fastTextEngine.isLoaded(primaryLang)) {
+                    fastTextEngine.loadLanguage(primaryLang)
+                }
+
+                val neighbors = if (secondaryLang != null) {
+                    if (!fastTextEngine.isLoaded(secondaryLang)) {
+                        fastTextEngine.loadLanguage(secondaryLang)
+                    }
+                    fastTextEngine.findKNearestBilingual(word, primaryLang, secondaryLang, 3)
+                } else {
+                    fastTextEngine.findKNearest(word, primaryLang, 3)
+                }
+
+                if (neighbors.isNotEmpty()) {
+                    val semanticWords = neighbors.map { it.word }
+                    withContext(Dispatchers.Main) {
+                        if (isShowingBigramPredictions && displayBuffer.isEmpty()) {
+                            swipeKeyboardView?.updateSuggestions(
+                                semanticWords,
+                                SwipeKeyboardView.SuggestionMode.SEMANTIC,
+                            )
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun cancelSemanticEnrichment() {
+        semanticEnrichJob?.cancel()
+        semanticEnrichJob = null
+    }
+
     private fun clearBigramPredictions() {
+        cancelSemanticEnrichment()
         if (isShowingBigramPredictions) {
             isShowingBigramPredictions = false
             pendingSuggestions = emptyList()
@@ -1553,6 +1602,8 @@ class UrikInputMethodService :
 
         updateKeyboardForCurrentAction()
 
+        swipeKeyboardView?.startSwipeIdleAnimation()
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             autofillStateTracker.drainPendingResponse()?.let { buffered ->
                 if (!autofillStateTracker.isDismissed() && buffered.inlineSuggestions.isNotEmpty()) {
@@ -1627,6 +1678,7 @@ class UrikInputMethodService :
      */
     private fun handleLetterInput(char: String) {
         try {
+            cancelSemanticEnrichment()
             lastSpaceTime = 0
 
             if (requiresDirectCommit) {
