@@ -94,3 +94,12 @@ com.urik.keyboard.yml
 # Large FastText source files (pre-processing data)
 tools/data/*.gz
 tools/data/*.vec
+
+# Claude Code
+.claude/
+
+# Tripat (Gemini/Specify tooling)
+tripat/
+
+# Misc
+nul
