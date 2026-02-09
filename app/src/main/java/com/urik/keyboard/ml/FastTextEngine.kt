@@ -19,12 +19,17 @@ import javax.inject.Singleton
  *
  * Vectors are stored pre-normalized, so cosine similarity = dot product.
  * Brute-force search over 60k words x 100 dims ~ 1.5ms on Snapdragon 855.
+ *
+ * Supports category-based stores (NOUN/VERB) for trigram S-V-O graph.
  */
 @Singleton
 class FastTextEngine @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     private val stores = mutableMapOf<String, VectorStore>()
+    private val alignMatrices = mutableMapOf<String, FloatArray>()
+
+    enum class WordCategory { NOUN, VERB }
 
     class VectorStore(
         val words: Array<String>,
@@ -223,14 +228,156 @@ class FastTextEngine @Inject constructor(
         d2.await()
     }
 
+    // --- Category-aware API for trigram S-V-O graph ---
+
+    private fun categoryKey(tag: String, category: WordCategory): String = "${tag}_${category.name}"
+
+    /**
+     * Load a category-specific .uvec file (e.g., fasttext_fr_nouns.uvec).
+     * Alignment matrix is loaded once per language and shared across categories.
+     */
+    suspend fun loadLanguageCategory(tag: String, category: WordCategory) = withContext(Dispatchers.IO) {
+        val key = categoryKey(tag, category)
+        if (stores.containsKey(key)) {
+            Log.d(TAG, "loadLanguageCategory($key): already loaded")
+            return@withContext
+        }
+
+        val startMs = System.currentTimeMillis()
+        Log.d(TAG, "loadLanguageCategory($key): loading...")
+
+        val suffix = when (category) {
+            WordCategory.NOUN -> "nouns"
+            WordCategory.VERB -> "verbs"
+        }
+        val vecPath = "vectors/fasttext_${tag}_${suffix}.uvec"
+
+        val store = loadUvecFile(vecPath)
+
+        // Load alignment matrix once per language (shared between noun/verb)
+        val alignMatrix = alignMatrices.getOrPut(tag) {
+            val alignPath = "vectors/align_$tag.bin"
+            loadAlignMatrix(alignPath, store.dimension) ?: FloatArray(0)
+        }.let { if (it.isEmpty()) null else it }
+
+        val finalStore = VectorStore(
+            words = store.words,
+            vectors = store.vectors,
+            dimension = store.dimension,
+            wordIndex = store.wordIndex,
+            alignMatrix = alignMatrix,
+        )
+
+        stores[key] = finalStore
+        val elapsed = System.currentTimeMillis() - startMs
+        Log.d(TAG, "loadLanguageCategory($key): ${finalStore.words.size} words, ${finalStore.dimension}D, ${elapsed}ms")
+    }
+
+    /**
+     * Load noun+verb stores for 1 or 2 languages in parallel.
+     */
+    suspend fun loadTrigramStores(tag1: String, tag2: String? = null) = coroutineScope {
+        val jobs = mutableListOf(
+            async { loadLanguageCategory(tag1, WordCategory.NOUN) },
+            async { loadLanguageCategory(tag1, WordCategory.VERB) },
+        )
+        if (tag2 != null) {
+            jobs.add(async { loadLanguageCategory(tag2, WordCategory.NOUN) })
+            jobs.add(async { loadLanguageCategory(tag2, WordCategory.VERB) })
+        }
+        jobs.forEach { it.await() }
+    }
+
+    /**
+     * Find k nearest neighbors in a specific category store.
+     */
+    fun findKNearest(anchor: String, tag: String, category: WordCategory, k: Int): List<ScoredWord> {
+        val key = categoryKey(tag, category)
+        val store = stores[key] ?: return emptyList()
+        val anchorIdx = store.wordIndex[anchor.lowercase()] ?: return emptyList()
+        val dim = store.dimension
+        val anchorOffset = anchorIdx * dim
+
+        return findTopK(store, anchorOffset, dim, k, tag, excludeIndex = anchorIdx)
+    }
+
+    /**
+     * Find k nearest neighbors across two languages in a specific category.
+     */
+    fun findKNearestBilingual(
+        anchor: String,
+        lang1: String,
+        lang2: String,
+        category: WordCategory,
+        k: Int,
+    ): List<ScoredWord> {
+        val key1 = categoryKey(lang1, category)
+        val store1 = stores[key1] ?: return emptyList()
+        val store2 = stores[categoryKey(lang2, category)]
+
+        val anchorAligned = getAlignedVector(anchor, lang1, category) ?: return emptyList()
+        val dim = store1.dimension
+
+        val results = mutableListOf<ScoredWord>()
+
+        val anchorIdx1 = store1.wordIndex[anchor.lowercase()] ?: -1
+        results.addAll(findTopKAligned(store1, anchorAligned, dim, k, lang1, excludeIndex = anchorIdx1))
+
+        if (store2 != null) {
+            results.addAll(findTopKAligned(store2, anchorAligned, dim, k, lang2, excludeIndex = -1))
+        }
+
+        return results.sortedByDescending { it.similarity }.take(k)
+    }
+
+    /**
+     * Get aligned vector from a category store.
+     */
+    fun getAlignedVector(word: String, tag: String, category: WordCategory): FloatArray? {
+        val key = categoryKey(tag, category)
+        val store = stores[key] ?: return null
+        val idx = store.wordIndex[word.lowercase()] ?: return null
+        val raw = VectorMath.extractVector(store.vectors, idx, store.dimension)
+        val matrix = store.alignMatrix ?: return raw
+
+        val aligned = FloatArray(store.dimension)
+        VectorMath.matVecMultiply(matrix, raw, aligned, store.dimension, store.dimension)
+        return aligned
+    }
+
+    /**
+     * Get raw vector from a category store.
+     */
+    fun getVector(word: String, tag: String, category: WordCategory): FloatArray? {
+        val key = categoryKey(tag, category)
+        val store = stores[key] ?: return null
+        val idx = store.wordIndex[word.lowercase()] ?: return null
+        return VectorMath.extractVector(store.vectors, idx, store.dimension)
+    }
+
+    fun isCategoryLoaded(tag: String, category: WordCategory): Boolean =
+        stores.containsKey(categoryKey(tag, category))
+
     /**
      * Handle memory pressure: unload secondary language.
+     * Unloads verbs first (smaller, less critical), then nouns.
      */
     fun onTrimMemory(primaryLang: String) {
-        val toUnload = stores.keys.filter { it != primaryLang }
+        // Unload category stores for non-primary languages (verbs first)
+        val categoryKeys = stores.keys.filter { key ->
+            !key.startsWith("${primaryLang}_") && key.contains("_")
+        }.sortedByDescending { it.endsWith("VERB") } // verbs first
+
+        categoryKeys.forEach { key ->
+            stores.remove(key)
+            Log.d(TAG, "onTrimMemory: unloaded category store $key")
+        }
+
+        // Unload legacy full-language stores for non-primary
+        val toUnload = stores.keys.filter { it != primaryLang && !it.contains("_") }
         toUnload.forEach { unloadLanguage(it) }
-        if (toUnload.isNotEmpty()) {
-            Log.d(TAG, "onTrimMemory: unloaded ${toUnload.joinToString()}, kept $primaryLang")
+        if (toUnload.isNotEmpty() || categoryKeys.isNotEmpty()) {
+            Log.d(TAG, "onTrimMemory: unloaded ${(toUnload + categoryKeys).joinToString()}, kept $primaryLang")
         }
     }
 

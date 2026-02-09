@@ -2,7 +2,8 @@
 
 **Feature Branch**: `tripatevoleOne`
 **Created**: 2026-02-08
-**Status**: Draft
+**Updated**: 2026-02-09
+**Status**: In Progress (Phase 2 - Trigram S-V-O)
 **Constitution**: Tripat v1.0.0
 
 ## Vision
@@ -541,6 +542,153 @@ Conversion hors-ligne via `tools/convert_fasttext.py` (Python, pas dans l'APK).
 
 ---
 
+## Phase 2 : Trigram S-V-O — Graphe semantique tri-zone (EN COURS)
+
+### Vision
+
+Extension du graphe semantique mono-ancre vers un mode **trigramme Sujet-Verbe-Objet** (S-V-O). Le graphe est divise en 3 zones horizontales independantes, chacune projetee par PCA dans sa propre bande d'ecran. Chaque zone affiche les k plus proches voisins semantiques dans une categorie grammaticale specifique (noms pour S/O, verbes pour V). Fallback automatique vers le mode single-graph quand les stores categoriels ne sont pas disponibles.
+
+### Pipeline POS-split (`convert_fasttext.py`)
+
+```
+cc.{lang}.300.vec  ──►  convert_fasttext.py --pos-split --lang {lang}
+                              │
+                              ├── fasttext_{lang}_nouns.uvec   (noms + noms propres)
+                              └── fasttext_{lang}_verbs.uvec   (verbes)
+```
+
+- **POS tagging** : spaCy (`fr_core_news_sm` / `en_core_web_sm`), batch processing par lots de 1000
+- **Ambiguite** : les mots ambigus (nom dans un contexte, verbe dans un autre) sont dupliques dans les deux fichiers
+- **Format** : `.uvec` identique au format existant (float16, L2-normalise, trie alphabetiquement)
+- **Alignement MUSE** : matrice `align_{lang}.bin` partagee entre stores noun/verb d'une meme langue
+
+### Stores categoriels (`FastTextEngine.kt`)
+
+- `WordCategory` enum : `NOUN`, `VERB`
+- Cle de store : `"{lang}_{CATEGORY}"` (ex: `fr_NOUN`, `en_VERB`)
+- `loadTrigramStores(tag1, tag2?)` : chargement parallele (4 async jobs max en bilingue)
+- `findKNearest(anchor, tag, category, k)` : k-NN monolingue par categorie
+- `findKNearestBilingual(anchor, lang1, lang2, category, k)` : k-NN bilingue par categorie avec vecteurs alignes MUSE
+- `getAlignedVector(word, tag, category)` / `getVector(word, tag, category)` : acces aux vecteurs par categorie
+- `isCategoryLoaded(tag, category)` : test de disponibilite
+- `onTrimMemory()` ameliore : decharge les verbes en premier (plus petits, moins critiques), puis les noms des langues secondaires
+
+### Projection PCA tri-zone (`PcaProjector.kt`)
+
+- `TrigramZone` enum : `SUBJECT`, `VERB`, `OBJECT`
+- `TrigramProjection` data class : zone + projections 2D + anchorWord
+- `projectTrigram(...)` : 3 PCA independantes, chacune dans sa propre bande horizontale
+- `projectToRegion(...)` : methode interne factorisee (utilisee aussi par `project()` en mode single)
+
+**Layout des zones :**
+
+| Zone    | xMin  | xMax  | anchorX | anchorY |
+|---------|-------|-------|---------|---------|
+| SUBJECT | 0.05  | 0.30  | 0.175   | 0.45    |
+| VERB    | 0.35  | 0.65  | 0.50    | 0.45    |
+| OBJECT  | 0.70  | 0.95  | 0.825   | 0.45    |
+
+### Rendu graphique (`SemanticGraphOverlay.kt`)
+
+- **Mode dual** : `isTrigramMode` flag — l'overlay gere les deux modes (single + trigram)
+- `TrigramGraphData` : data class contenant 3 ancres + 3 listes de `GraphNode`
+- `setTrigramNodes(data)` : point d'entree pour activer le mode trigram
+- `drawTrigramMode()` : rendu Canvas avec :
+  - 2 separateurs verticaux (33% et 66% de la largeur)
+  - Labels de zone en haut : "SUJET", "ACTION", "OBJET"
+  - Animation magnetique par zone (ease-out-expo, 3s) identique au mode single
+  - Vibration residuelle decroissante
+  - Rotation par zone autour du centre de chaque zone
+- `drawDnaSpiralTrigram()` : spirale ADN/ARN decalee a l'extreme gauche (4% de la largeur) pour eviter le chevauchement avec la zone SUBJECT
+- `getTrigramZoneIndex(flatIndex)` : mapping index plat → index de zone (0=S, 1=V, 2=O)
+- `onTrigramZoneWordSelected` : callback avec (word, zoneIndex)
+- Tailles reduites : ancres 28dp (vs 36dp single), noeuds 20dp (vs 24dp single)
+- `resetState()` : nettoyage complet du mode trigram
+
+### Integration IME (`UrikInputMethodService.kt`)
+
+- `triggerTrigramGraph(completedWord)` : remplace `triggerSemanticGraph()` comme point d'entree principal
+- **Heuristique d'ancrage** (version actuelle) : les 3 ancres = mot complete (fallback uniforme — a ameliorer)
+- **k-NN par zone** : k=6 par zone (~18 noeuds total en bilingue)
+- **Fallback** : si aucun voisin trouve dans les stores categoriels → retour au mode single-graph via `triggerSemanticGraph()`
+- `getTrigramAnchorVector()` : recuperation du vecteur ancre avec 3 niveaux de fallback :
+  1. Store categoriel demande (NOUN ou VERB)
+  2. Store categoriel oppose
+  3. Store legacy (langue complete)
+- Points d'appel : validation de mot (commitText), selection de suggestion, double-tap espace
+
+### Bridge (`SwipeKeyboardView.kt`)
+
+- `setSemanticGraphTrigramNodes(data)` : passe les donnees trigram a l'overlay
+- `setOnTrigramZoneWordSelectedListener(listener)` : enregistre le callback de selection par zone
+
+### Fichiers modifies (Phase 2)
+
+| Fichier | Lignes ajoutees | Role |
+|---------|----------------|------|
+| `tools/convert_fasttext.py` | +127 | Pipeline POS-split via spaCy |
+| `ml/FastTextEngine.kt` | +153 | API categorielle (stores, k-NN, vecteurs) |
+| `ml/PcaProjector.kt` | +131 | Projection trigram 3 zones |
+| `ui/concentric/SemanticGraphOverlay.kt` | +346 | Rendu Canvas trigram + DNA spiral adapte |
+| `UrikInputMethodService.kt` | +188 | Orchestration trigram + fallbacks |
+| `ui/keyboard/components/SwipeKeyboardView.kt` | +12 | Bridge methodes trigram |
+
+### User Stories Phase 2
+
+#### US-P2-1 — Graphe semantique S-V-O tri-zone (P1) — IMPLEMENTE
+
+L'utilisateur tape un mot sur le clavier eX²Libris. Apres validation, un graphe semantique apparait en overlay, divise en 3 zones horizontales : SUJET (noms a gauche), ACTION (verbes au centre), OBJET (noms a droite). Chaque zone montre les k plus proches voisins semantiques de l'ancre dans sa categorie grammaticale.
+
+**Acceptance Scenarios :**
+
+1. **Given** l'utilisateur valide un mot, **When** les stores categoriels (noun/verb) sont charges, **Then** le graphe trigram s'affiche avec 3 zones separees contenant chacune ~6 noeuds
+2. **Given** les stores categoriels ne sont pas disponibles, **When** l'utilisateur valide un mot, **Then** le systeme retombe sur le graphe single-anchor existant
+3. **Given** le mode bilingue est active, **When** le graphe trigram s'affiche, **Then** chaque zone contient des mots des 2 langues, differencies par couleur
+
+#### US-P2-2 — Navigation gestuelle par zone (P1) — IMPLEMENTE
+
+L'utilisateur peut interagir avec chaque zone du graphe trigram : taper un noeud pour le selectionner (avec flash visuel), ou effectuer une rotation multi-pinch qui s'applique autour du centre de chaque zone.
+
+**Acceptance Scenarios :**
+
+1. **Given** le graphe trigram est affiche, **When** l'utilisateur tape un noeud, **Then** un flash de selection s'affiche et les callbacks `onWordSelected` et `onTrigramZoneWordSelected` sont invoques
+2. **Given** le graphe trigram est affiche, **When** l'utilisateur effectue un geste de rotation, **Then** la rotation s'applique independamment autour du centre de chaque zone
+
+#### US-P2-3 — Spirale ADN contextuelle adaptee (P2) — IMPLEMENTE
+
+La spirale ADN/ARN (historique de la phrase en cours) est repositionnee a l'extreme gauche (4% de la largeur) en mode trigram pour ne pas chevaucher la zone SUBJECT.
+
+#### US-P2-4 — Pipeline de generation POS-split (P1) — IMPLEMENTE
+
+`convert_fasttext.py` supporte un mode `--pos-split --lang {fr|en}` qui genere 2 fichiers `.uvec` separes (noms et verbes) a partir d'un fichier FastText source, via spaCy POS tagging.
+
+**Acceptance Scenarios :**
+
+1. **Given** un fichier FastText `.vec` source, **When** on execute `python convert_fasttext.py --input cc.fr.300.vec --pos-split --lang fr --dim 100`, **Then** 2 fichiers sont generes : `fasttext_fr_nouns.uvec` et `fasttext_fr_verbs.uvec`
+2. **Given** un mot ambigu (ex: "marche" = nom et verbe), **When** le POS split est effectue, **Then** le mot apparait dans les deux fichiers
+
+#### US-P2-5 — Heuristique d'ancrage contextuel S-V-O (P2) — A FAIRE
+
+Actuellement les 3 ancres sont le meme mot (fallback uniforme). L'heuristique cible :
+- VERB : le mot complete (ou dernier verbe dans le contexte de la phrase)
+- SUBJECT : dernier nom avant le verbe
+- OBJECT : mot complete si c'est un nom en position post-verbale
+
+#### US-P2-6 — Interaction zone-specifique (P3) — A FAIRE
+
+Quand l'utilisateur tape un mot dans une zone specifique, seule cette zone est recalculee avec le nouveau mot comme ancre, les 2 autres zones conservent leur etat. Permet une exploration independante S, V, et O.
+
+### Edge Cases Phase 2
+
+- **Store categoriel manquant** : fallback vers le mode single-graph (`triggerSemanticGraph`)
+- **Mot absent de tous les stores** : aucun graphe affiche (log + skip)
+- **Vecteur ancre introuvable dans la categorie demandee** : fallback categorie opposee → store legacy
+- **Memory pressure** : verbes decharges en premier, puis noms des langues secondaires
+- **Mot < 2 caracteres** : trigram graph non declenche
+- **Graphe deja visible** : trigram graph non re-declenche (protection anti-doublon)
+
+---
+
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
@@ -552,3 +700,8 @@ Conversion hors-ligne via `tools/convert_fasttext.py` (Python, pas dans l'APK).
 - **SC-005**: Basculement AZERTY <-> Concentrique en < 200ms
 - **SC-006**: Phase 0 validee sur Snapdragon 855 avant tout developpement fonctionnel
 - **SC-007**: Chaque phase de qualification documentee avec rapport de metriques mesure sur device
+- **SC-008**: Le graphe trigram s'affiche en < 50ms apres le k-NN (hors chargement initial des stores)
+- **SC-009**: Les 3 zones sont visuellement distinctes (separateurs + labels SUJET/ACTION/OBJET)
+- **SC-010**: Le fallback single-graph fonctionne sans crash quand les stores categoriels sont absents
+- **SC-011**: Le pipeline POS-split produit des fichiers `.uvec` conformes au format existant
+- **SC-012**: L'animation magnetique trigram est fluide a 60fps sur device cible

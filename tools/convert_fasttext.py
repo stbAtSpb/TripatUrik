@@ -6,6 +6,10 @@ Usage:
     python convert_fasttext.py --input cc.fr.300.vec --output fasttext_fr.uvec --dim 100 --max-words 60000
     python convert_fasttext.py --input cc.en.300.vec --output fasttext_en.uvec --dim 100 --max-words 60000
 
+POS-split mode (generates separate noun/verb .uvec files):
+    python convert_fasttext.py --input cc.fr.300.vec --pos-split --lang fr --dim 100 --max-words 60000
+    python convert_fasttext.py --input cc.en.300.vec --pos-split --lang en --dim 100 --max-words 60000
+
 MUSE alignment matrix conversion:
     python convert_fasttext.py --convert-muse --input best_mapping_fr.pth --output align_fr.bin --dim 100
     python convert_fasttext.py --convert-muse --input best_mapping_en.pth --output align_en.bin --dim 100
@@ -134,6 +138,88 @@ def write_uvec(path: str, words: list, vectors: np.ndarray, dimension: int):
     print(f"  Written {path}: {word_count} words, {dimension}D, {file_size / 1024 / 1024:.1f} MB")
 
 
+def pos_split_vocabulary(words: list, lang: str) -> tuple:
+    """
+    Split vocabulary into nouns and verbs using spaCy POS lexicon.
+    Ambiguous words (tagged as both in different contexts) go into both lists.
+    Returns (noun_indices, verb_indices) as lists of indices into the words array.
+    """
+    model_name = {
+        'fr': 'fr_core_news_sm',
+        'en': 'en_core_web_sm',
+    }.get(lang)
+    if not model_name:
+        raise ValueError(f"Unsupported language for POS tagging: {lang}")
+
+    try:
+        import spacy
+    except ImportError:
+        print("ERROR: spaCy is required for --pos-split mode")
+        print("  pip install spacy")
+        print(f"  python -m spacy download {model_name}")
+        sys.exit(1)
+
+    try:
+        nlp = spacy.load(model_name)
+    except OSError:
+        print(f"ERROR: spaCy model '{model_name}' not found")
+        print(f"  python -m spacy download {model_name}")
+        sys.exit(1)
+
+    print(f"  POS tagging {len(words)} words with {model_name}...")
+
+    noun_indices = []
+    verb_indices = []
+    ambiguous_count = 0
+
+    # Use nlp.pipe for batch processing (much faster than word-by-word)
+    # Process words in batches to get POS tags
+    batch_size = 1000
+    for batch_start in range(0, len(words), batch_size):
+        batch_end = min(batch_start + batch_size, len(words))
+        batch_words = words[batch_start:batch_end]
+
+        # Use nlp.pipe with disable to only get tagger
+        docs = list(nlp.pipe(batch_words, disable=['parser', 'ner'], batch_size=batch_size))
+
+        for i, doc in enumerate(docs):
+            word_idx = batch_start + i
+            if len(doc) == 0:
+                continue
+
+            # For single-word input, the POS of the first token
+            pos = doc[0].pos_
+
+            is_noun = pos in ('NOUN', 'PROPN')
+            is_verb = pos == 'VERB'
+
+            # Also check lexeme-level POS for ambiguity detection
+            lexeme = nlp.vocab[words[word_idx]]
+            lex_pos = lexeme.pos_ if hasattr(lexeme, 'pos_') and lexeme.pos_ else None
+
+            if lex_pos and lex_pos != pos:
+                # Ambiguous: lexeme says different POS than context-free tagger
+                lex_is_noun = lex_pos in ('NOUN', 'PROPN')
+                lex_is_verb = lex_pos == 'VERB'
+                if (is_noun and lex_is_verb) or (is_verb and lex_is_noun):
+                    noun_indices.append(word_idx)
+                    verb_indices.append(word_idx)
+                    ambiguous_count += 1
+                    continue
+
+            if is_noun:
+                noun_indices.append(word_idx)
+            elif is_verb:
+                verb_indices.append(word_idx)
+            # ADJ, ADV, DET, etc. are dropped
+
+        if (batch_end) % 10000 == 0 or batch_end == len(words):
+            print(f"    POS tagged {batch_end}/{len(words)} words...")
+
+    print(f"  POS split: {len(noun_indices)} nouns, {len(verb_indices)} verbs, {ambiguous_count} ambiguous (in both)")
+    return noun_indices, verb_indices
+
+
 def convert_muse_matrix(input_path: str, output_path: str, dim: int):
     """Convert MUSE alignment matrix (PyTorch .pth) to compact float16 binary."""
     try:
@@ -165,17 +251,56 @@ def convert_muse_matrix(input_path: str, output_path: str, dim: int):
 def main():
     parser = argparse.ArgumentParser(description='Convert FastText .vec to .uvec format')
     parser.add_argument('--input', required=True, help='Input file path (.vec or .pth)')
-    parser.add_argument('--output', required=True, help='Output file path (.uvec or .bin)')
+    parser.add_argument('--output', default=None, help='Output file path (.uvec or .bin). Not needed for --pos-split.')
     parser.add_argument('--dim', type=int, default=100, help='Target dimension (default: 100)')
     parser.add_argument('--max-words', type=int, default=60000, help='Max words to keep (default: 60000)')
     parser.add_argument('--convert-muse', action='store_true', help='Convert MUSE alignment matrix')
+    parser.add_argument('--pos-split', action='store_true', help='Split vocabulary by POS (noun/verb) using spaCy')
+    parser.add_argument('--lang', default=None, help='Language tag (fr/en) - required for --pos-split')
 
     args = parser.parse_args()
 
     if args.convert_muse:
+        if not args.output:
+            parser.error("--output is required for --convert-muse")
         print(f"Converting MUSE matrix: {args.input} -> {args.output}")
         convert_muse_matrix(args.input, args.output, args.dim)
+    elif args.pos_split:
+        if not args.lang:
+            parser.error("--lang is required for --pos-split (fr or en)")
+
+        lang = args.lang.lower()
+        print(f"Converting FastText with POS split: {args.input} (lang={lang})")
+        print(f"  Target: {args.max_words} words, {args.dim} dimensions")
+
+        words, vectors = load_fasttext_vec(args.input, args.max_words, args.dim)
+
+        print("  L2-normalizing vectors...")
+        vectors = l2_normalize(vectors)
+
+        # POS-tag and split
+        noun_indices, verb_indices = pos_split_vocabulary(words, lang)
+
+        # Write noun .uvec
+        noun_words = [words[i] for i in noun_indices]
+        noun_vectors = vectors[noun_indices]
+        noun_path = f"fasttext_{lang}_nouns.uvec"
+        print(f"\n  Writing nouns: {len(noun_words)} words")
+        write_uvec(noun_path, noun_words, noun_vectors, args.dim)
+
+        # Write verb .uvec
+        verb_words = [words[i] for i in verb_indices]
+        verb_vectors = vectors[verb_indices]
+        verb_path = f"fasttext_{lang}_verbs.uvec"
+        print(f"\n  Writing verbs: {len(verb_words)} words")
+        write_uvec(verb_path, verb_words, verb_vectors, args.dim)
+
+        print(f"\n  Summary:")
+        print(f"    Nouns: {len(noun_words)} words -> {noun_path}")
+        print(f"    Verbs: {len(verb_words)} words -> {verb_path}")
     else:
+        if not args.output:
+            parser.error("--output is required (or use --pos-split)")
         print(f"Converting FastText: {args.input} -> {args.output}")
         print(f"  Target: {args.max_words} words, {args.dim} dimensions")
 

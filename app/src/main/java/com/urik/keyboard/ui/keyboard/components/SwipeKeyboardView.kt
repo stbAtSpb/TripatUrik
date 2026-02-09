@@ -2181,6 +2181,18 @@ class SwipeKeyboardView
             }
         }
 
+        fun setSemanticGraphTrigramNodes(data: SemanticGraphOverlay.TrigramGraphData) {
+            if (!isDestroyed) {
+                semanticGraphOverlay.setTrigramNodes(data)
+            }
+        }
+
+        fun setOnTrigramZoneWordSelectedListener(listener: (String, Int) -> Unit) {
+            if (!isDestroyed) {
+                semanticGraphOverlay.onTrigramZoneWordSelected = listener
+            }
+        }
+
         fun setOnSemanticWordSelectedListener(listener: (String) -> Unit) {
             if (!isDestroyed) {
                 this.onSemanticWordSelected = listener

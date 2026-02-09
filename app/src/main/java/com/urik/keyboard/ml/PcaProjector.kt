@@ -8,6 +8,9 @@ import kotlin.math.sqrt
  * Projects N high-dimensional vectors to 2D via Principal Component Analysis.
  * Uses power iteration to find the 2 principal eigenvectors.
  * Designed for N=8-20 neighbors, D=100 dimensions (~1-5ms).
+ *
+ * Supports trigram S-V-O projection: 3 independent PCA projections
+ * mapped to distinct screen regions.
  */
 object PcaProjector {
 
@@ -19,6 +22,14 @@ object PcaProjector {
         val similarity: Float,
     )
 
+    enum class TrigramZone { SUBJECT, VERB, OBJECT }
+
+    data class TrigramProjection(
+        val zone: TrigramZone,
+        val projections: List<Projection2D>,
+        val anchorWord: String,
+    )
+
     private const val POWER_ITERATIONS = 25
     private const val MARGIN_MIN = 0.1f
     private const val MARGIN_MAX = 0.9f
@@ -27,13 +38,7 @@ object PcaProjector {
 
     /**
      * Project neighbor vectors to 2D positions via PCA.
-     *
-     * @param anchorVector The anchor word's vector (placed at center)
-     * @param neighbors List of (word, aligned vector) pairs
-     * @param languageTags Language tag for each neighbor (parallel to neighbors)
-     * @param similarities Cosine similarity for each neighbor (parallel to neighbors)
-     * @param rotationAngleRad Optional rotation for multi-pinch gesture
-     * @return 2D projections normalized to [0.1, 0.9] with anchor at center
+     * Uses default full-screen bounds [0.1, 0.9] with anchor at (0.5, 0.45).
      */
     fun project(
         anchorVector: FloatArray,
@@ -42,10 +47,87 @@ object PcaProjector {
         similarities: List<Float>,
         rotationAngleRad: Float = 0f,
     ): List<Projection2D> {
+        return projectToRegion(
+            anchorVector, neighbors, languageTags, similarities,
+            rotationAngleRad,
+            xMin = MARGIN_MIN, xMax = MARGIN_MAX,
+            anchorX = ANCHOR_X, anchorY = ANCHOR_Y,
+        )
+    }
+
+    /**
+     * Project 3 sets of neighbors into 3 distinct screen zones for S-V-O trigram.
+     *
+     * - SUBJECT: x in [0.05, 0.30], anchor at (0.175, 0.45)
+     * - VERB:    x in [0.35, 0.65], anchor at (0.50, 0.45)
+     * - OBJECT:  x in [0.70, 0.95], anchor at (0.825, 0.45)
+     */
+    fun projectTrigram(
+        subjectAnchor: String,
+        subjectAnchorVec: FloatArray,
+        subjectNeighbors: List<Pair<String, FloatArray>>,
+        subjectLangTags: List<String>,
+        subjectSims: List<Float>,
+        verbAnchor: String,
+        verbAnchorVec: FloatArray,
+        verbNeighbors: List<Pair<String, FloatArray>>,
+        verbLangTags: List<String>,
+        verbSims: List<Float>,
+        objectAnchor: String,
+        objectAnchorVec: FloatArray,
+        objectNeighbors: List<Pair<String, FloatArray>>,
+        objectLangTags: List<String>,
+        objectSims: List<Float>,
+        rotationAngleRad: Float = 0f,
+    ): List<TrigramProjection> {
+        val subjectProjections = projectToRegion(
+            subjectAnchorVec, subjectNeighbors, subjectLangTags, subjectSims,
+            rotationAngleRad,
+            xMin = 0.05f, xMax = 0.30f,
+            anchorX = 0.175f, anchorY = 0.45f,
+        )
+
+        val verbProjections = projectToRegion(
+            verbAnchorVec, verbNeighbors, verbLangTags, verbSims,
+            rotationAngleRad,
+            xMin = 0.35f, xMax = 0.65f,
+            anchorX = 0.50f, anchorY = 0.45f,
+        )
+
+        val objectProjections = projectToRegion(
+            objectAnchorVec, objectNeighbors, objectLangTags, objectSims,
+            rotationAngleRad,
+            xMin = 0.70f, xMax = 0.95f,
+            anchorX = 0.825f, anchorY = 0.45f,
+        )
+
+        return listOf(
+            TrigramProjection(TrigramZone.SUBJECT, subjectProjections, subjectAnchor),
+            TrigramProjection(TrigramZone.VERB, verbProjections, verbAnchor),
+            TrigramProjection(TrigramZone.OBJECT, objectProjections, objectAnchor),
+        )
+    }
+
+    /**
+     * Project neighbor vectors to 2D within a custom region.
+     */
+    private fun projectToRegion(
+        anchorVector: FloatArray,
+        neighbors: List<Pair<String, FloatArray>>,
+        languageTags: List<String>,
+        similarities: List<Float>,
+        rotationAngleRad: Float,
+        xMin: Float,
+        xMax: Float,
+        anchorX: Float,
+        anchorY: Float,
+    ): List<Projection2D> {
         if (neighbors.isEmpty()) return emptyList()
 
         val dim = anchorVector.size
         val n = neighbors.size
+        val yMin = 0.1f
+        val yMax = 0.9f
 
         // 1. Collect all vectors (anchor + neighbors)
         val allVectors = mutableListOf(anchorVector)
@@ -91,37 +173,36 @@ object PcaProjector {
             }
         }
 
-        // 6. Normalize to [MARGIN_MIN, MARGIN_MAX]
-        // Skip index 0 (anchor) for range computation, but include it
-        var minX = Float.MAX_VALUE
-        var maxX = Float.MIN_VALUE
-        var minY = Float.MAX_VALUE
-        var maxY = Float.MIN_VALUE
+        // 6. Normalize to [xMin, xMax] x [yMin, yMax]
+        var coordMinX = Float.MAX_VALUE
+        var coordMaxX = Float.MIN_VALUE
+        var coordMinY = Float.MAX_VALUE
+        var coordMaxY = Float.MIN_VALUE
 
         for (coord in coords) {
-            if (coord[0] < minX) minX = coord[0]
-            if (coord[0] > maxX) maxX = coord[0]
-            if (coord[1] < minY) minY = coord[1]
-            if (coord[1] > maxY) maxY = coord[1]
+            if (coord[0] < coordMinX) coordMinX = coord[0]
+            if (coord[0] > coordMaxX) coordMaxX = coord[0]
+            if (coord[1] < coordMinY) coordMinY = coord[1]
+            if (coord[1] > coordMaxY) coordMaxY = coord[1]
         }
 
-        val rangeX = maxX - minX
-        val rangeY = maxY - minY
-        val range = MARGIN_MAX - MARGIN_MIN
+        val rangeX = coordMaxX - coordMinX
+        val rangeY = coordMaxY - coordMinY
+        val regionRangeX = xMax - xMin
+        val regionRangeY = yMax - yMin
 
-        // Map anchor (index 0) to center, scale neighbors relative to it
         val anchorProjX = coords[0][0]
         val anchorProjY = coords[0][1]
 
-        val scaleX = if (rangeX > 1e-6f) range / rangeX else 1f
-        val scaleY = if (rangeY > 1e-6f) range / rangeY else 1f
+        val scaleX = if (rangeX > 1e-6f) regionRangeX / rangeX else 1f
+        val scaleY = if (rangeY > 1e-6f) regionRangeY / rangeY else 1f
 
         val results = mutableListOf<Projection2D>()
         for (i in 1..n) {
             val relX = (coords[i][0] - anchorProjX) * scaleX
             val relY = (coords[i][1] - anchorProjY) * scaleY
-            val nx = (ANCHOR_X + relX).coerceIn(MARGIN_MIN, MARGIN_MAX)
-            val ny = (ANCHOR_Y + relY).coerceIn(MARGIN_MIN, MARGIN_MAX)
+            val nx = (anchorX + relX).coerceIn(xMin, xMax)
+            val ny = (anchorY + relY).coerceIn(yMin, yMax)
 
             results.add(
                 Projection2D(

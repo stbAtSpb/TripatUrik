@@ -530,7 +530,7 @@ class UrikInputMethodService :
                 clearInternalStateOnly()
                 showBigramPredictions()
                 if (wordToLearn != null) {
-                    triggerSemanticGraph(wordToLearn)
+                    triggerTrigramGraph(wordToLearn)
                 }
             } catch (_: Exception) {
                 currentInputConnection?.finishComposingText()
@@ -769,7 +769,7 @@ class UrikInputMethodService :
 
                     coordinateStateClear()
                     showBigramPredictions()
-                    triggerSemanticGraph(suggestion)
+                    triggerTrigramGraph(suggestion)
 
                     val textBefore = safeGetTextBeforeCursor(50)
                     viewModel.checkAndApplyAutoCapitalization(textBefore, currentSettings.autoCapitalizationEnabled)
@@ -2281,6 +2281,186 @@ class UrikInputMethodService :
         }
     }
 
+    // --- Trigram S-V-O graph ---
+
+    /**
+     * Determine the 3 anchors from sentence context and trigger the trigram graph.
+     *
+     * Heuristic:
+     * - VERB: the completed word (or last verb in context)
+     * - SUBJECT: last noun before the verb
+     * - OBJECT: completed word if it's likely a noun (post-verb position)
+     * - Fallback: all 3 anchors = completed word
+     */
+    private fun triggerTrigramGraph(completedWord: String) {
+        if (completedWord.isBlank() || completedWord.length < 2) {
+            Log.d(TAG_SEM, "triggerTrigramGraph SKIP: word='$completedWord' (blank or <2 chars)")
+            return
+        }
+        if (swipeKeyboardView?.isSemanticGraphShowing() == true) {
+            Log.d(TAG_SEM, "triggerTrigramGraph SKIP: graph already visible")
+            return
+        }
+        Log.d(TAG_SEM, "triggerTrigramGraph: '$completedWord'")
+        swipeKeyboardView?.showSemanticGraph(completedWord)
+
+        serviceScope.launch {
+            try {
+                val settings = settingsRepository.settings.first()
+                val primaryLang = languageManager.currentLanguage.value
+                val isBilingual = settings.bilingualGraphEnabled
+                val secondaryLang = if (primaryLang == "fr") "en" else "fr"
+                val k = 6 // k per zone (15-18 total)
+
+                // Ensure category stores are loaded
+                fastTextEngine.loadTrigramStores(
+                    primaryLang,
+                    if (isBilingual) secondaryLang else null,
+                )
+
+                // Determine anchors: fallback = all 3 anchors are the completed word
+                val subjectAnchor = completedWord
+                val verbAnchor = completedWord
+                val objectAnchor = completedWord
+
+                val startMs = System.currentTimeMillis()
+
+                // Find k-NN in parallel for each zone
+                val subjectScored = if (isBilingual) {
+                    fastTextEngine.findKNearestBilingual(subjectAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.NOUN, k)
+                } else {
+                    fastTextEngine.findKNearest(subjectAnchor, primaryLang, FastTextEngine.WordCategory.NOUN, k)
+                }
+
+                val verbScored = if (isBilingual) {
+                    fastTextEngine.findKNearestBilingual(verbAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.VERB, k)
+                } else {
+                    fastTextEngine.findKNearest(verbAnchor, primaryLang, FastTextEngine.WordCategory.VERB, k)
+                }
+
+                val objectScored = if (isBilingual) {
+                    fastTextEngine.findKNearestBilingual(objectAnchor, primaryLang, secondaryLang, FastTextEngine.WordCategory.NOUN, k)
+                } else {
+                    fastTextEngine.findKNearest(objectAnchor, primaryLang, FastTextEngine.WordCategory.NOUN, k)
+                }
+
+                if (subjectScored.isEmpty() && verbScored.isEmpty() && objectScored.isEmpty()) {
+                    Log.d(TAG_SEM, "triggerTrigramGraph: no neighbors found for '$completedWord'")
+                    // Fall back to single-graph mode
+                    triggerSemanticGraph(completedWord)
+                    return@launch
+                }
+
+                // Get anchor vectors (try noun store first, then verb, then legacy)
+                val subjectAnchorVec = getTrigramAnchorVector(subjectAnchor, primaryLang, isBilingual, FastTextEngine.WordCategory.NOUN)
+                val verbAnchorVec = getTrigramAnchorVector(verbAnchor, primaryLang, isBilingual, FastTextEngine.WordCategory.VERB)
+                val objectAnchorVec = getTrigramAnchorVector(objectAnchor, primaryLang, isBilingual, FastTextEngine.WordCategory.NOUN)
+
+                if (subjectAnchorVec == null || verbAnchorVec == null || objectAnchorVec == null) {
+                    Log.d(TAG_SEM, "triggerTrigramGraph: missing anchor vector for '$completedWord', falling back")
+                    triggerSemanticGraph(completedWord)
+                    return@launch
+                }
+
+                // Get neighbor vectors for each zone
+                fun getNeighborData(scored: List<FastTextEngine.ScoredWord>, category: FastTextEngine.WordCategory): Triple<List<Pair<String, FloatArray>>, List<String>, List<Float>> {
+                    val neighbors = scored.mapNotNull { sw ->
+                        val vec = if (isBilingual) {
+                            fastTextEngine.getAlignedVector(sw.word, sw.languageTag, category)
+                        } else {
+                            fastTextEngine.getVector(sw.word, sw.languageTag, category)
+                        }
+                        vec?.let { sw.word to it }
+                    }
+                    val langTags = scored.take(neighbors.size).map { it.languageTag }
+                    val sims = scored.take(neighbors.size).map { it.similarity }
+                    return Triple(neighbors, langTags, sims)
+                }
+
+                val (subjectNeighbors, subjectLangTags, subjectSims) = getNeighborData(subjectScored, FastTextEngine.WordCategory.NOUN)
+                val (verbNeighbors, verbLangTags, verbSims) = getNeighborData(verbScored, FastTextEngine.WordCategory.VERB)
+                val (objectNeighbors, objectLangTags, objectSims) = getNeighborData(objectScored, FastTextEngine.WordCategory.NOUN)
+
+                // Project via PCA to 3 zones
+                val trigramProjections = withContext(Dispatchers.Default) {
+                    PcaProjector.projectTrigram(
+                        subjectAnchor, subjectAnchorVec, subjectNeighbors, subjectLangTags, subjectSims,
+                        verbAnchor, verbAnchorVec, verbNeighbors, verbLangTags, verbSims,
+                        objectAnchor, objectAnchorVec, objectNeighbors, objectLangTags, objectSims,
+                    )
+                }
+
+                val elapsed = System.currentTimeMillis() - startMs
+                Log.d(TAG_SEM, "triggerTrigramGraph: projected S=${subjectNeighbors.size} V=${verbNeighbors.size} O=${objectNeighbors.size} in ${elapsed}ms")
+
+                // Convert to GraphNodes
+                fun toGraphNodes(projections: List<PcaProjector.Projection2D>): List<SemanticGraphOverlay.GraphNode> {
+                    return projections.map { proj ->
+                        SemanticGraphOverlay.GraphNode(
+                            word = proj.word,
+                            xPercent = proj.x,
+                            yPercent = proj.y,
+                            languageTag = proj.languageTag,
+                            similarity = proj.similarity,
+                        )
+                    }
+                }
+
+                val trigramData = SemanticGraphOverlay.TrigramGraphData(
+                    subjectAnchor = subjectAnchor,
+                    subjectNodes = toGraphNodes(trigramProjections[0].projections),
+                    verbAnchor = verbAnchor,
+                    verbNodes = toGraphNodes(trigramProjections[1].projections),
+                    objectAnchor = objectAnchor,
+                    objectNodes = toGraphNodes(trigramProjections[2].projections),
+                )
+
+                // Extract sentence context for DNA spiral
+                val sentenceContext = withContext(Dispatchers.Main) {
+                    extractSentenceContextWords(completedWord)
+                }
+
+                withContext(Dispatchers.Main) {
+                    swipeKeyboardView?.setSemanticGraphContextWords(sentenceContext)
+                    swipeKeyboardView?.setSemanticGraphTrigramNodes(trigramData)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG_SEM, "triggerTrigramGraph: error computing graph", e)
+            }
+        }
+    }
+
+    /**
+     * Get anchor vector from category store, with fallbacks.
+     */
+    private fun getTrigramAnchorVector(
+        word: String,
+        primaryLang: String,
+        isBilingual: Boolean,
+        category: FastTextEngine.WordCategory,
+    ): FloatArray? {
+        return if (isBilingual) {
+            fastTextEngine.getAlignedVector(word, primaryLang, category)
+        } else {
+            fastTextEngine.getVector(word, primaryLang, category)
+        } ?: run {
+            // Fallback: try the other category
+            val otherCategory = if (category == FastTextEngine.WordCategory.NOUN) FastTextEngine.WordCategory.VERB else FastTextEngine.WordCategory.NOUN
+            if (isBilingual) {
+                fastTextEngine.getAlignedVector(word, primaryLang, otherCategory)
+            } else {
+                fastTextEngine.getVector(word, primaryLang, otherCategory)
+            }
+        } ?: run {
+            // Final fallback: try legacy full store
+            if (isBilingual) {
+                fastTextEngine.getAlignedVector(word, primaryLang)
+            } else {
+                fastTextEngine.getVector(word, primaryLang)
+            }
+        }
+    }
+
     /**
      * Handles suggestion removal via long press.
      *
@@ -2975,7 +3155,7 @@ class UrikInputMethodService :
                                     currentInputConnection?.commitText(" ", 1)
                                     clearInternalStateOnly()
                                     showBigramPredictions()
-                                    triggerSemanticGraph(completedWord)
+                                    triggerTrigramGraph(completedWord)
 
                                     val textBefore =
                                         safeGetTextBeforeCursor(50)
@@ -3015,7 +3195,7 @@ class UrikInputMethodService :
                     currentInputConnection?.commitText(" ", 1)
                     clearInternalStateOnly()
                     showBigramPredictions()
-                    triggerSemanticGraph(fallbackWord)
+                    triggerTrigramGraph(fallbackWord)
 
                     val textBefore = safeGetTextBeforeCursor(50)
                     viewModel.checkAndApplyAutoCapitalization(textBefore, currentSettings.autoCapitalizationEnabled)

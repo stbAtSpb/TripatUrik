@@ -31,7 +31,17 @@ class SemanticGraphOverlay
             val similarity: Float = 0f,
         )
 
+        data class TrigramGraphData(
+            val subjectAnchor: String,
+            val subjectNodes: List<GraphNode>,
+            val verbAnchor: String,
+            val verbNodes: List<GraphNode>,
+            val objectAnchor: String,
+            val objectNodes: List<GraphNode>,
+        )
+
         var onWordSelected: ((String) -> Unit)? = null
+        var onTrigramZoneWordSelected: ((String, Int) -> Unit)? = null // word, zoneIndex (0=S, 1=V, 2=O)
         var onDismissed: (() -> Unit)? = null
         var onTouchInteraction: (() -> Unit)? = null
         var onNeologismRequested: ((GraphNode, GraphNode) -> Unit)? = null
@@ -43,6 +53,12 @@ class SemanticGraphOverlay
         private var fadeAlpha: Float = 0f
         private var fadeAnimator: ValueAnimator? = null
         private var isLoading: Boolean = false
+
+        // Trigram S-V-O mode state
+        private var isTrigramMode: Boolean = false
+        private var trigramData: TrigramGraphData? = null
+        private var trigramAnimatedNodes: List<List<AnimatedNode>> = emptyList() // 3 lists for S, V, O
+        private var trigramAnchorWords: List<String> = emptyList() // 3 anchor words
 
         private var swipeStartY = 0f
         private var isSwiping = false
@@ -166,6 +182,20 @@ class SemanticGraphOverlay
             textAlign = Paint.Align.CENTER
         }
 
+        // Zone separator paint for trigram mode
+        private val separatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x30_E8D5B7.toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f
+        }
+
+        // Zone label paint for trigram mode
+        private val zoneLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x80_E8D5B7.toInt()
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+
         private val dnaPath = Path()
 
         private val nodeHitRects = mutableListOf<Pair<RectF, Int>>() // rect -> node index
@@ -280,6 +310,83 @@ class SemanticGraphOverlay
             invalidate()
         }
 
+        /**
+         * Set trigram S-V-O mode data. Each zone gets its own anchor and nodes.
+         */
+        fun setTrigramNodes(data: TrigramGraphData) {
+            isTrigramMode = true
+            trigramData = data
+            isLoading = false
+            fadeAlpha = 1f
+            liveRotationDelta = 0f
+            cumulativeRotation = 0f
+
+            trigramAnchorWords = listOf(
+                data.subjectAnchor.lowercase().trim(),
+                data.verbAnchor.lowercase().trim(),
+                data.objectAnchor.lowercase().trim(),
+            )
+
+            // Combine all nodes into a flat list for hit testing (used by existing touch code)
+            val allNodes = data.subjectNodes + data.verbNodes + data.objectNodes
+            nodes = allNodes
+            anchorWord = data.verbAnchor.lowercase().trim() // primary display anchor
+
+            // Build animated nodes per zone
+            val zoneNodeSets = listOf(data.subjectNodes, data.verbNodes, data.objectNodes)
+            val zoneCenters = listOf(
+                Pair(TRIGRAM_SUBJECT_CENTER_X, 0.45f),
+                Pair(TRIGRAM_VERB_CENTER_X, 0.45f),
+                Pair(TRIGRAM_OBJECT_CENTER_X, 0.45f),
+            )
+
+            val oldAnimated = trigramAnimatedNodes
+            val now = System.currentTimeMillis()
+
+            trigramAnimatedNodes = zoneNodeSets.mapIndexed { zoneIdx, zoneNodes ->
+                val centerX = zoneCenters[zoneIdx].first
+                val centerY = zoneCenters[zoneIdx].second
+                val oldZone = oldAnimated.getOrNull(zoneIdx) ?: emptyList()
+
+                zoneNodes.map { node ->
+                    val targetX = node.xPercent
+                    val targetY = node.yPercent
+                    val hash = node.word.hashCode()
+                    val vibFreq = 2f + (hash and 0xFF) / 255f * 3f
+                    val vibPhase = ((hash shr 8) and 0xFF) / 255f * (2f * Math.PI.toFloat())
+
+                    val (startX, startY) = if (oldZone.isEmpty()) {
+                        val dx = targetX - centerX
+                        val dy = targetY - centerY
+                        Pair(centerX + dx * EXPLODE_FACTOR, centerY + dy * EXPLODE_FACTOR)
+                    } else {
+                        val elapsed = (now - animationStartTime).toFloat()
+                        val oldNode = oldZone.find { it.node.word == node.word }
+                        if (oldNode != null) {
+                            val t = (elapsed / STABILIZATION_DURATION_MS).coerceIn(0f, 1f)
+                            val progress = easeOutExpo(t)
+                            Pair(
+                                lerp(oldNode.startX, oldNode.targetX, progress),
+                                lerp(oldNode.startY, oldNode.targetY, progress),
+                            )
+                        } else {
+                            val dx = targetX - centerX
+                            val dy = targetY - centerY
+                            Pair(centerX + dx * EXPLODE_FACTOR, centerY + dy * EXPLODE_FACTOR)
+                        }
+                    }
+
+                    AnimatedNode(node, startX, startY, targetX, targetY, vibFreq, vibPhase)
+                }
+            }
+            animationStartTime = now
+            isAnimating = true
+
+            Log.d(TAG, "setTrigramNodes: S=${data.subjectNodes.size} V=${data.verbNodes.size} O=${data.objectNodes.size}")
+            nodeHitRects.clear()
+            invalidate()
+        }
+
         fun fadeIn(duration: Long = CROSS_FADE_DURATION) {
             Log.d(TAG, "fadeIn: duration=${duration}ms | anchor='$anchorWord'")
             fadeAnimator?.cancel()
@@ -330,21 +437,19 @@ class SemanticGraphOverlay
 
             canvas.drawRect(0f, 0f, w, h, bgPaint)
 
-            val centerX = w * 0.5f
-            val centerY = h * 0.45f
-
             val density = resources.displayMetrics.density
-            val anchorRadius = 36f * density
-            val baseNodeRadius = 24f * density
             anchorTextPaint.textSize = 16f * density
             nodeTextPaint.textSize = 13f * density
             loadingPaint.textSize = 14f * density
             legendTextPaint.textSize = 10f * density
+            zoneLabelPaint.textSize = 11f * density
 
             nodeHitRects.clear()
 
             if (isLoading) {
-                // Draw loading indicator
+                val centerX = w * 0.5f
+                val centerY = h * 0.45f
+                val anchorRadius = 36f * density
                 canvas.drawCircle(centerX, centerY, anchorRadius, anchorPaint)
                 val anchorTextY = centerY - (anchorTextPaint.descent() + anchorTextPaint.ascent()) / 2f
                 canvas.drawText(anchorWord, centerX, anchorTextY, anchorTextPaint)
@@ -354,6 +459,22 @@ class SemanticGraphOverlay
                 canvas.drawText("...", centerX, loadingY, loadingPaint)
                 return
             }
+
+            if (isTrigramMode) {
+                drawTrigramMode(canvas, w, h, density)
+            } else {
+                drawSingleMode(canvas, w, h, density)
+            }
+        }
+
+        /**
+         * Draw single-anchor mode (original behavior).
+         */
+        private fun drawSingleMode(canvas: Canvas, w: Float, h: Float, density: Float) {
+            val centerX = w * 0.5f
+            val centerY = h * 0.45f
+            val anchorRadius = 36f * density
+            val baseNodeRadius = 24f * density
 
             // --- DNA/RNA spiral: sentence context on the left side ---
             if (contextWords.isNotEmpty()) {
@@ -382,7 +503,7 @@ class SemanticGraphOverlay
                 val interpY = lerp(anim.startY, anim.targetY, progress)
                 val vibX = sin(now * 0.001f * anim.vibFreq * 2f * Math.PI.toFloat() + anim.vibPhase) * vibAmplitude
                 val vibY = cos(now * 0.001f * anim.vibFreq * 0.7f * 2f * Math.PI.toFloat() + anim.vibPhase) * vibAmplitude
-                val animX = interpX + vibX / w  // convert dp vibration back to percent
+                val animX = interpX + vibX / w
                 val animY = interpY + vibY / h
 
                 // Apply rotation around center
@@ -391,16 +512,14 @@ class SemanticGraphOverlay
                 val nx = centerX + rawX * cosR - rawY * sinR
                 val ny = centerY + rawX * sinR + rawY * cosR
 
-                // Size proportional to similarity: [0.7, 1.3] range
                 val sizeFactor = 0.7f + (node.similarity.coerceIn(0f, 1f) * 0.6f)
                 val nodeRadius = baseNodeRadius * sizeFactor
 
-                // Color by language tag
                 val isHighlighted = highlightedNodeIndices.contains(index)
                 val isSelected = selectedNodeIndex == index
 
                 nodePaint.color = when {
-                    isHighlighted -> 0xFF_FFD700.toInt() // gold when highlighted by pinch
+                    isHighlighted -> 0xFF_FFD700.toInt()
                     node.languageTag == "fr" && hasBilingual -> frenchNodeColor
                     node.languageTag == "en" && hasBilingual -> englishNodeColor
                     else -> 0xFF_3A3A5E.toInt()
@@ -408,13 +527,11 @@ class SemanticGraphOverlay
 
                 canvas.drawCircle(nx, ny, nodeRadius, nodePaint)
 
-                // Draw highlight halo ring
                 if (isHighlighted) {
                     highlightPaint.strokeWidth = 3f * density
                     canvas.drawCircle(nx, ny, nodeRadius + 4f * density, highlightPaint)
                 }
 
-                // Draw selection flash overlay
                 if (isSelected && selectionFlashAlpha > 0f) {
                     selectionFlashPaint.alpha = (selectionFlashAlpha * 200).toInt()
                     canvas.drawCircle(nx, ny, nodeRadius + 6f * density * selectionFlashAlpha, selectionFlashPaint)
@@ -452,6 +569,181 @@ class SemanticGraphOverlay
             if (hasBilingual) {
                 drawBilingualLegend(canvas, w, h, density)
             }
+        }
+
+        /**
+         * Draw trigram S-V-O mode with 3 distinct zones.
+         */
+        private fun drawTrigramMode(canvas: Canvas, w: Float, h: Float, density: Float) {
+            val anchorRadius = TRIGRAM_ANCHOR_RADIUS_DP * density
+            val baseNodeRadius = TRIGRAM_NODE_RADIUS_DP * density
+
+            // --- DNA/RNA spiral: sentence context on the extreme left (shifted for subject zone) ---
+            if (contextWords.isNotEmpty()) {
+                drawDnaSpiralTrigram(canvas, w, h, density)
+            }
+
+            // Draw 2 vertical separators at 33% and 66%
+            val sep1X = w * 0.33f
+            val sep2X = w * 0.66f
+            canvas.drawLine(sep1X, h * 0.06f, sep1X, h * 0.94f, separatorPaint)
+            canvas.drawLine(sep2X, h * 0.06f, sep2X, h * 0.94f, separatorPaint)
+
+            // Draw zone labels at top
+            val labelY = h * 0.04f + zoneLabelPaint.textSize
+            canvas.drawText("SUJET", w * TRIGRAM_SUBJECT_CENTER_X, labelY, zoneLabelPaint)
+            canvas.drawText("ACTION", w * TRIGRAM_VERB_CENTER_X, labelY, zoneLabelPaint)
+            canvas.drawText("OBJET", w * TRIGRAM_OBJECT_CENTER_X, labelY, zoneLabelPaint)
+
+            // Animation progress
+            val now = System.currentTimeMillis()
+            val elapsed = (now - animationStartTime).toFloat()
+            val t = (elapsed / STABILIZATION_DURATION_MS).coerceIn(0f, 1f)
+            val progress = easeOutExpo(t)
+            val vibAmplitude = MAX_VIBRATION_DP * density * (1f - progress)
+
+            val hasBilingual = nodes.any { it.languageTag != nodes.firstOrNull()?.languageTag }
+
+            // Draw nodes for each zone
+            var globalNodeIndex = 0
+            val zoneCenters = listOf(
+                Pair(w * TRIGRAM_SUBJECT_CENTER_X, h * 0.45f),
+                Pair(w * TRIGRAM_VERB_CENTER_X, h * 0.45f),
+                Pair(w * TRIGRAM_OBJECT_CENTER_X, h * 0.45f),
+            )
+
+            for (zoneIdx in 0 until 3) {
+                val zoneAnims = trigramAnimatedNodes.getOrNull(zoneIdx) ?: continue
+                val zoneCenterX = zoneCenters[zoneIdx].first
+                val zoneCenterY = zoneCenters[zoneIdx].second
+
+                // Rotation applied per-zone around that zone's center
+                val totalRotation = cumulativeRotation + liveRotationDelta
+                val cosR = cos(totalRotation)
+                val sinR = sin(totalRotation)
+
+                for (anim in zoneAnims) {
+                    val node = anim.node
+                    val interpX = lerp(anim.startX, anim.targetX, progress)
+                    val interpY = lerp(anim.startY, anim.targetY, progress)
+                    val vibX = sin(now * 0.001f * anim.vibFreq * 2f * Math.PI.toFloat() + anim.vibPhase) * vibAmplitude
+                    val vibY = cos(now * 0.001f * anim.vibFreq * 0.7f * 2f * Math.PI.toFloat() + anim.vibPhase) * vibAmplitude
+                    val animX = interpX + vibX / w
+                    val animY = interpY + vibY / h
+
+                    // Apply rotation around zone center
+                    val rawX = w * animX - zoneCenterX
+                    val rawY = h * animY - zoneCenterY
+                    val nx = zoneCenterX + rawX * cosR - rawY * sinR
+                    val ny = zoneCenterY + rawX * sinR + rawY * cosR
+
+                    val sizeFactor = 0.7f + (node.similarity.coerceIn(0f, 1f) * 0.6f)
+                    val nodeRadius = baseNodeRadius * sizeFactor
+
+                    val isHighlighted = highlightedNodeIndices.contains(globalNodeIndex)
+                    val isSelected = selectedNodeIndex == globalNodeIndex
+
+                    nodePaint.color = when {
+                        isHighlighted -> 0xFF_FFD700.toInt()
+                        node.languageTag == "fr" && hasBilingual -> frenchNodeColor
+                        node.languageTag == "en" && hasBilingual -> englishNodeColor
+                        else -> 0xFF_3A3A5E.toInt()
+                    }
+
+                    canvas.drawCircle(nx, ny, nodeRadius, nodePaint)
+
+                    if (isHighlighted) {
+                        highlightPaint.strokeWidth = 3f * density
+                        canvas.drawCircle(nx, ny, nodeRadius + 4f * density, highlightPaint)
+                    }
+
+                    if (isSelected && selectionFlashAlpha > 0f) {
+                        selectionFlashPaint.alpha = (selectionFlashAlpha * 200).toInt()
+                        canvas.drawCircle(nx, ny, nodeRadius + 6f * density * selectionFlashAlpha, selectionFlashPaint)
+                    }
+
+                    val textY = ny - (nodeTextPaint.descent() + nodeTextPaint.ascent()) / 2f
+                    canvas.drawText(node.word, nx, textY, nodeTextPaint)
+
+                    nodeHitRects.add(
+                        Pair(
+                            RectF(
+                                nx - nodeRadius * 1.5f,
+                                ny - nodeRadius * 1.5f,
+                                nx + nodeRadius * 1.5f,
+                                ny + nodeRadius * 1.5f,
+                            ),
+                            globalNodeIndex,
+                        ),
+                    )
+                    globalNodeIndex++
+                }
+
+                // Draw anchor node for this zone on top
+                val anchorLabel = trigramAnchorWords.getOrNull(zoneIdx) ?: ""
+                canvas.drawCircle(zoneCenterX, zoneCenterY, anchorRadius, anchorPaint)
+                anchorTextPaint.textSize = 14f * density // slightly smaller for trigram
+                val anchorTextY = zoneCenterY - (anchorTextPaint.descent() + anchorTextPaint.ascent()) / 2f
+                canvas.drawText(anchorLabel, zoneCenterX, anchorTextY, anchorTextPaint)
+            }
+
+            // Schedule next animation frame if still animating
+            if (isAnimating && t < 1f) {
+                postInvalidateOnAnimation()
+            } else if (isAnimating && t >= 1f) {
+                isAnimating = false
+            }
+
+            // Draw bilingual legend at bottom
+            if (hasBilingual) {
+                drawBilingualLegend(canvas, w, h, density)
+            }
+        }
+
+        /**
+         * DNA spiral shifted to extreme left for trigram mode (avoid subject zone overlap).
+         */
+        private fun drawDnaSpiralTrigram(canvas: Canvas, w: Float, h: Float, density: Float) {
+            val count = contextWords.size
+            if (count == 0) return
+
+            val dnaNodeRadius = 12f * density
+            dnaTextPaint.textSize = 8f * density
+
+            // Shifted to extreme left edge
+            val spiralCenterX = w * 0.04f
+            val spiralTopY = h * 0.10f
+            val spiralBottomY = h * 0.85f
+            val amplitude = w * 0.03f
+
+            dnaPath.reset()
+            var firstPoint = true
+
+            for (i in 0 until count) {
+                val progress = if (count > 1) i.toFloat() / (count - 1) else 0.5f
+                val y = spiralTopY + (spiralBottomY - spiralTopY) * (1f - progress)
+                val phase = progress * Math.PI.toFloat() * 2.5f
+                val waveOffset = sin(phase) * amplitude
+                val x = spiralCenterX + waveOffset
+                val wordAlpha = 0.3f + 0.5f * progress
+                val sizeFactor = 0.6f + 0.4f * progress
+                val radius = dnaNodeRadius * sizeFactor
+
+                if (firstPoint) {
+                    dnaPath.moveTo(x, y)
+                    firstPoint = false
+                } else {
+                    dnaPath.lineTo(x, y)
+                }
+
+                dnaNodePaint.alpha = (wordAlpha * 128).toInt()
+                canvas.drawCircle(x, y, radius, dnaNodePaint)
+                dnaTextPaint.alpha = (wordAlpha * 200).toInt()
+                val textY = y - (dnaTextPaint.descent() + dnaTextPaint.ascent()) / 2f
+                canvas.drawText(contextWords[i], x, textY, dnaTextPaint)
+            }
+
+            canvas.drawPath(dnaPath, dnaBackbonePaint)
         }
 
         private fun drawBilingualLegend(canvas: Canvas, w: Float, h: Float, density: Float) {
@@ -640,8 +932,11 @@ class SemanticGraphOverlay
                         if (nodeIdx >= 0 && nodeIdx < nodes.size) {
                             val word = nodes[nodeIdx].word
                             Log.d(TAG, "touch: node tapped '$word' at (${x.toInt()}, ${y.toInt()})")
-                            // Flash the selected node before firing callback
                             flashSelectedNode(nodeIdx) {
+                                if (isTrigramMode) {
+                                    val zoneIdx = getTrigramZoneIndex(nodeIdx)
+                                    onTrigramZoneWordSelected?.invoke(word, zoneIdx)
+                                }
                                 onWordSelected?.invoke(word)
                             }
                             performClick()
@@ -690,6 +985,19 @@ class SemanticGraphOverlay
             val dx = event.getX(1) - event.getX(0)
             val dy = event.getY(1) - event.getY(0)
             return atan2(dy, dx)
+        }
+
+        /**
+         * Determine which trigram zone (0=S, 1=V, 2=O) a flat node index belongs to.
+         */
+        private fun getTrigramZoneIndex(flatIndex: Int): Int {
+            if (!isTrigramMode) return -1
+            var cumulative = 0
+            for (zoneIdx in trigramAnimatedNodes.indices) {
+                cumulative += trigramAnimatedNodes[zoneIdx].size
+                if (flatIndex < cumulative) return zoneIdx
+            }
+            return -1
         }
 
         private fun tryNeologism() {
@@ -749,6 +1057,7 @@ class SemanticGraphOverlay
             selectionFlashAnimator = null
             fadeAlpha = 0f
             onWordSelected = null
+            onTrigramZoneWordSelected = null
             onDismissed = null
             onTouchInteraction = null
             onNeologismRequested = null
@@ -763,6 +1072,10 @@ class SemanticGraphOverlay
             liveRotationDelta = 0f
             highlightedNodeIndices.clear()
             selectedNodeIndex = -1
+            isTrigramMode = false
+            trigramData = null
+            trigramAnimatedNodes = emptyList()
+            trigramAnchorWords = emptyList()
         }
 
         override fun onDetachedFromWindow() {
@@ -789,5 +1102,12 @@ class SemanticGraphOverlay
             private const val EXPLODE_FACTOR = 1.8f
             private const val CENTER_X_PERCENT = 0.5f
             private const val CENTER_Y_PERCENT = 0.45f
+
+            // Trigram zone centers (percent of width)
+            private const val TRIGRAM_SUBJECT_CENTER_X = 0.175f
+            private const val TRIGRAM_VERB_CENTER_X = 0.50f
+            private const val TRIGRAM_OBJECT_CENTER_X = 0.825f
+            private const val TRIGRAM_ANCHOR_RADIUS_DP = 28f
+            private const val TRIGRAM_NODE_RADIUS_DP = 20f
         }
     }
